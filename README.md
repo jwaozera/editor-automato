@@ -1,1 +1,1 @@
-# editor-automato
+# Editor de automatos
