@@ -48,7 +48,7 @@ interface HistoryState {
   transitions: Transition[];
 }
 
-// OTIMIZAÇÃO StateNode super leve - só re-renderiza quando necessário
+//  OTIMIZAÇÃO StateNode super leve - só re-renderiza quando necessário
 const StateNode = forwardRef<HTMLDivElement, {
   state: State;
   isActive: boolean;
@@ -114,18 +114,20 @@ const AutomatonEditor: React.FC = () => {
   const [transitionSymbols, setTransitionSymbols] = useState('');
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
-  
-  // OTIMIZAÇÃO Estado separado para posições durante drag (não disparar re-render de transições)
+
+  //  OTIMIZAÇÃO Estado separado para posições durante drag (não dispara re-render de transições!)
   const [isDragging, setIsDragging] = useState(false);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
   const canvasOverlayRef = useRef<HTMLCanvasElement | null>(null);
-  
+
   const stateElRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const statesRef = useRef<State[]>(states);
-  
+  const transitionsRef = useRef<Transition[]>(transitions);
+
   useEffect(() => { statesRef.current = states; }, [states]);
+  useEffect(() => { transitionsRef.current = transitions; }, [transitions]);
 
   const draggingRef = useRef<{
     id: string | null;
@@ -135,7 +137,37 @@ const AutomatonEditor: React.FC = () => {
     currentY: number;
   }>({ id: null, offsetX: 0, offsetY: 0, currentX: 0, currentY: 0 });
 
-  // OTIMIZAÇÃO Canvas overlay para desenhar transições durante drag (garantir 60fps)
+  // Indexes e helpers para evitar buscas O(N) em loops
+  const stateByIdRef = useRef<Record<string, State>>({});
+  const transitionsByStateRef = useRef<Record<string, string[]>>({});
+  const reverseSetRef = useRef<Set<string>>(new Set());
+  const idCounterRef = useRef<number>(1); // incremental id generator
+  const historyIndexRef = useRef<number>(historyIndex);
+
+  useEffect(() => { historyIndexRef.current = historyIndex; }, [historyIndex]);
+
+  // build indexes quando states ou transitions mudam
+  useEffect(() => {
+    const sById: Record<string, State> = {};
+    for (const s of statesRef.current) sById[s.id] = s;
+    stateByIdRef.current = sById;
+
+    const tByState: Record<string, string[]> = {};
+    for (const t of transitionsRef.current) {
+      tByState[t.from] ??= [];
+      tByState[t.from].push(t.id);
+      tByState[t.to] ??= [];
+      tByState[t.to].push(t.id);
+    }
+    transitionsByStateRef.current = tByState;
+
+    const rev = new Set<string>();
+    for (const t of transitionsRef.current) rev.add(`${t.to}->${t.from}`);
+    reverseSetRef.current = rev;
+  }, [states, transitions]);
+
+  //  OTIMIZAÇÃO Canvas overlay para desenhar transições durante drag (60fps garantido)
+  // Draw function implemented to use refs (stable) and avoid heavy dependencies
   const drawTransitionsOnCanvas = useCallback(() => {
     const canvas = canvasOverlayRef.current;
     if (!canvas || !isDragging) return;
@@ -143,22 +175,42 @@ const AutomatonEditor: React.FC = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    // Clear canvas
+    // Clear canvas (using CSS pixel size; canvas already scaled by DPR)
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Pegar posições atualizadas
-    const currentStates = statesRef.current.map(s => {
-      if (s.id === draggingRef.current.id) {
-        return { ...s, x: draggingRef.current.currentX, y: draggingRef.current.currentY };
-      }
-      return s;
-    });
+    // Get lookup maps (O(1) access)
+    const stateById = stateByIdRef.current;
+    const transitionsArr = transitionsRef.current;
+    const reverseSet = reverseSetRef.current;
 
-    // Desenhar transições
-    transitions.forEach(t => {
-      const from = currentStates.find(s => s.id === t.from);
-      const to = currentStates.find(s => s.id === t.to);
-      if (!from || !to) return;
+    // Determine which transitions to draw:
+    const draggingId = draggingRef.current.id;
+    let transitionsToDraw: Transition[] = [];
+
+    if (draggingId) {
+      const connectedIds = transitionsByStateRef.current[draggingId] || [];
+      // map ids -> transitions
+      const tMap = Object.fromEntries(transitionsArr.map(t => [t.id, t]));
+      for (const tid of connectedIds) {
+        const t = tMap[tid];
+        if (t) transitionsToDraw.push(t);
+      }
+    } else {
+      transitionsToDraw = transitionsArr;
+    }
+
+    // Provide temporary view of dragged state's position without rebuilding whole states array
+    const dragged = draggingRef.current;
+    // Set common ctx settings once
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.font = 'bold 14px sans-serif';
+    ctx.textAlign = 'center';
+
+    for (const t of transitionsToDraw) {
+      const from = (t.from === dragged.id && dragged.id) ? { ...stateById[t.from], x: dragged.currentX, y: dragged.currentY } : stateById[t.from];
+      const to = (t.to === dragged.id && dragged.id) ? { ...stateById[t.to], x: dragged.currentX, y: dragged.currentY } : stateById[t.to];
+      if (!from || !to) continue;
 
       const isSelf = t.from === t.to;
 
@@ -179,14 +231,12 @@ const AutomatonEditor: React.FC = () => {
         ctx.stroke();
 
         // Label
-        ctx.font = 'bold 14px sans-serif';
-        ctx.textAlign = 'center';
         ctx.fillText(t.symbols.join(', '), from.x - 5, from.y - 100);
       } else {
         const dx = to.x - from.x, dy = to.y - from.y;
         const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
         const offsetX = (dx / dist) * 40, offsetY = (dy / dist) * 40;
-        const hasReverse = transitions.some(tr => tr.from === to.id && tr.to === from.id);
+        const hasReverse = reverseSet.has(`${t.to}->${t.from}`);
 
         ctx.beginPath();
         if (hasReverse) {
@@ -195,24 +245,20 @@ const AutomatonEditor: React.FC = () => {
           const perpX = -(dy / dist) * 30, perpY = (dx / dist) * 30;
           ctx.moveTo(from.x + offsetX, from.y + offsetY);
           ctx.quadraticCurveTo(midX + perpX, midY + perpY, to.x - offsetX, to.y - offsetY);
-          
+
           // Label
-          ctx.font = 'bold 14px sans-serif';
-          ctx.textAlign = 'center';
           ctx.fillText(t.symbols.join(', '), midX + perpX, midY + perpY);
         } else {
           // Straight line
           ctx.moveTo(from.x + offsetX, from.y + offsetY);
           ctx.lineTo(to.x - offsetX, to.y - offsetY);
-          
+
           // Label
-          ctx.font = 'bold 14px sans-serif';
-          ctx.textAlign = 'center';
           ctx.fillText(t.symbols.join(', '), (from.x + to.x) / 2, (from.y + to.y) / 2);
         }
         ctx.stroke();
 
-        // Arrow
+        // Arrow head
         const angle = Math.atan2(dy, dx);
         const arrowSize = 10;
         ctx.fillStyle = ctx.strokeStyle;
@@ -229,32 +275,41 @@ const AutomatonEditor: React.FC = () => {
         ctx.closePath();
         ctx.fill();
       }
-    });
-  }, [isDragging, transitions, selectedTransition]);
+    }
+  }, [isDragging, selectedTransition]);
 
-  // OTIMIZAÇÃO Atualizar canvas em loop RAF durante drag
+  //  OTIMIZAÇÃO Atualizar canvas em loop RAF durante drag (keeps draw stable)
   useEffect(() => {
     if (!isDragging) return;
 
-    let rafId: number;
+    let rafId = 0;
     const animate = () => {
       drawTransitionsOnCanvas();
       rafId = requestAnimationFrame(animate);
     };
-    
+
     rafId = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(rafId);
   }, [isDragging, drawTransitionsOnCanvas]);
 
-  // Resize canvas to match container
+  // Resize canvas to match container and handle DPR
   useEffect(() => {
     const updateCanvasSize = () => {
       const canvas = canvasOverlayRef.current;
       const container = canvasRef.current;
       if (!canvas || !container) return;
 
-      canvas.width = container.clientWidth;
-      canvas.height = container.clientHeight;
+      const clientWidth = container.clientWidth;
+      const clientHeight = container.clientHeight;
+      const DPR = window.devicePixelRatio || 1;
+
+      canvas.width = Math.floor(clientWidth * DPR);
+      canvas.height = Math.floor(clientHeight * DPR);
+      canvas.style.width = `${clientWidth}px`;
+      canvas.style.height = `${clientHeight}px`;
+
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     };
 
     updateCanvasSize();
@@ -262,40 +317,54 @@ const AutomatonEditor: React.FC = () => {
     return () => window.removeEventListener('resize', updateCanvasSize);
   }, []);
 
+  //  OTIMIZAÇÃO Dragging ultra-otimizado - só atualiza transform CSS, não React state
   const saveToHistory = useCallback((newStates: State[], newTransitions: Transition[]) => {
     const snapshot = deepCloneAutomaton(newStates, newTransitions);
     const MAX = 50;
+
     setHistory(prev => {
-      const newHistory = prev.slice(0, historyIndex + 1);
-      newHistory.push(snapshot);
-      if (newHistory.length > MAX) newHistory.splice(0, newHistory.length - MAX);
-      return newHistory;
+      // use historyIndexRef to slice head atomically
+      const head = prev.slice(0, historyIndexRef.current + 1);
+      head.push(snapshot);
+      if (head.length > MAX) head.splice(0, head.length - MAX);
+      // update historyIndexRef to new last index
+      historyIndexRef.current = head.length - 1;
+      // update controlled state for UI
+      setHistoryIndex(historyIndexRef.current);
+      return head;
     });
-    setHistoryIndex(prev => prev + 1);
-  }, [historyIndex]);
+  }, []);
 
   const undo = useCallback(() => {
-    if (historyIndex > 0) {
-      const newIndex = historyIndex - 1;
-      const snapshot = history[newIndex];
-      setHistoryIndex(newIndex);
-      setStates(snapshot.states.map(s => ({ ...s })));
-      setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
-    }
-  }, [history, historyIndex]);
+    setHistory(prev => {
+      if (historyIndexRef.current > 0) {
+        const newIndex = historyIndexRef.current - 1;
+        const snapshot = prev[newIndex];
+        historyIndexRef.current = newIndex;
+        setHistoryIndex(newIndex);
+        setStates(snapshot.states.map(s => ({ ...s })));
+        setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
+      }
+      return prev;
+    });
+  }, []);
 
   const redo = useCallback(() => {
-    if (historyIndex < history.length - 1) {
-      const newIndex = historyIndex + 1;
-      const snapshot = history[newIndex];
-      setHistoryIndex(newIndex);
-      setStates(snapshot.states.map(s => ({ ...s })));
-      setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
-    }
-  }, [history, historyIndex]);
+    setHistory(prev => {
+      if (historyIndexRef.current < prev.length - 1) {
+        const newIndex = historyIndexRef.current + 1;
+        const snapshot = prev[newIndex];
+        historyIndexRef.current = newIndex;
+        setHistoryIndex(newIndex);
+        setStates(snapshot.states.map(s => ({ ...s })));
+        setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
+      }
+      return prev;
+    });
+  }, []);
 
   const saveAutomaton = useCallback(() => {
-    const data = { states: statesRef.current, transitions };
+    const data = { states: statesRef.current, transitions: transitionsRef.current };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -303,26 +372,26 @@ const AutomatonEditor: React.FC = () => {
     a.download = 'automaton.json';
     a.click();
     URL.revokeObjectURL(url);
-  }, [transitions]);
+  }, []);
 
   const deleteSelected = useCallback(() => {
     if (!selectedState) return;
     const newStates = statesRef.current.filter(s => s.id !== selectedState);
-    const newTransitions = transitions.filter(t => t.from !== selectedState && t.to !== selectedState);
+    const newTransitions = transitionsRef.current.filter(t => t.from !== selectedState && t.to !== selectedState);
     setStates(newStates);
     setTransitions(newTransitions);
     saveToHistory(newStates, newTransitions);
     setSelectedState(null);
-  }, [selectedState, transitions, saveToHistory]);
+  }, [selectedState, saveToHistory]);
 
   const deleteTransition = useCallback(() => {
     if (selectedTransition) {
-      const newTransitions = transitions.filter(t => t.id !== selectedTransition);
+      const newTransitions = transitionsRef.current.filter(t => t.id !== selectedTransition);
       setTransitions(newTransitions);
       saveToHistory(statesRef.current, newTransitions);
       setSelectedTransition(null);
     }
-  }, [selectedTransition, transitions, saveToHistory]);
+  }, [selectedTransition, saveToHistory]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -359,11 +428,10 @@ const AutomatonEditor: React.FC = () => {
     }
   }, [currentStepIndex, isSimulating, simulationSteps.length]);
 
-  // OTIMIZAÇÃO Dragging ultra-otimizado - só atualiza transform CSS, não React state
   const handleStateMouseDown = useCallback((e: React.MouseEvent, stateId: string) => {
     if (mode !== 'select') return;
     e.stopPropagation();
-    
+
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
 
@@ -374,14 +442,14 @@ const AutomatonEditor: React.FC = () => {
     const offsetX = e.clientX - rect.left - st.x;
     const offsetY = e.clientY - rect.top - st.y;
 
-    draggingRef.current = { 
-      id: stateId, 
-      offsetX, 
-      offsetY, 
-      currentX: st.x, 
-      currentY: st.y 
+    draggingRef.current = {
+      id: stateId,
+      offsetX,
+      offsetY,
+      currentX: st.x,
+      currentY: st.y
     };
-    
+
     setIsDragging(true);
 
     const onMove = (ev: MouseEvent) => {
@@ -400,11 +468,11 @@ const AutomatonEditor: React.FC = () => {
       drag.currentX = desiredX;
       drag.currentY = desiredY;
 
-      const st = statesRef.current.find(s => s.id === drag.id);
-      if (!st) return;
+      const stRef = statesRef.current.find(s => s.id === drag.id);
+      if (!stRef) return;
 
-      const deltaX = desiredX - st.x;
-      const deltaY = desiredY - st.y;
+      const deltaX = desiredX - stRef.x;
+      const deltaY = desiredY - stRef.y;
 
       const elToMove = stateElRefs.current[drag.id];
       if (elToMove) {
@@ -412,7 +480,7 @@ const AutomatonEditor: React.FC = () => {
       }
     };
 
-    const onUp = () => {
+    const onUp = (ev?: MouseEvent) => {
       const drag = draggingRef.current;
 
       if (!drag.id) {
@@ -427,11 +495,11 @@ const AutomatonEditor: React.FC = () => {
 
       // Só agora atualizar React state (dispara re-render das transições)
       setStates(prev => {
-        const newStates = prev.map(s => 
+        const newStates = prev.map(s =>
           s.id === drag.id ? { ...s, x: drag.currentX, y: drag.currentY } : s
         );
         statesRef.current = newStates;
-        saveToHistory(newStates, transitions);
+        saveToHistory(newStates, transitionsRef.current);
         return newStates;
       });
 
@@ -443,7 +511,7 @@ const AutomatonEditor: React.FC = () => {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [mode, transitions, saveToHistory]);
+  }, [mode, saveToHistory]);
 
   const handleTransitionClick = useCallback((e: React.MouseEvent, transitionId: string) => {
     e.stopPropagation();
@@ -456,18 +524,19 @@ const AutomatonEditor: React.FC = () => {
   const addTransition = useCallback(() => {
     if (transitionFrom && transitionTo && transitionSymbols.trim()) {
       const symbols = transitionSymbols.split(',').map(s => s.trim()).filter(s => s);
-      const existing = transitions.find(t => t.from === transitionFrom && t.to === transitionTo);
+      const existing = transitionsRef.current.find(t => t.from === transitionFrom && t.to === transitionTo);
       let newTransitions: Transition[];
       if (existing) {
-        newTransitions = transitions.map(t => 
+        newTransitions = transitionsRef.current.map(t =>
           t.id === existing.id ? { ...t, symbols: Array.from(new Set([...t.symbols, ...symbols])) } : t
         );
       } else {
-        newTransitions = [...transitions, { 
-          id: `t${Date.now()}`, 
-          from: transitionFrom, 
-          to: transitionTo, 
-          symbols 
+        const newId = `t${idCounterRef.current++}`;
+        newTransitions = [...transitionsRef.current, {
+          id: newId,
+          from: transitionFrom,
+          to: transitionTo,
+          symbols
         }];
       }
       setTransitions(newTransitions);
@@ -478,12 +547,12 @@ const AutomatonEditor: React.FC = () => {
     setTransitionSymbols('');
     setShowTransitionDialog(false);
     setMode('select');
-  }, [transitionFrom, transitionTo, transitionSymbols, transitions, saveToHistory]);
+  }, [transitionFrom, transitionTo, transitionSymbols, saveToHistory]);
 
   const updateTransition = useCallback(() => {
     if (selectedTransition && transitionSymbols.trim()) {
       const symbols = transitionSymbols.split(',').map(s => s.trim()).filter(s => s);
-      const newTransitions = transitions.map(t => 
+      const newTransitions = transitionsRef.current.map(t =>
         t.id === selectedTransition ? { ...t, symbols } : t
       );
       setTransitions(newTransitions);
@@ -492,41 +561,39 @@ const AutomatonEditor: React.FC = () => {
       setTransitionSymbols('');
       setSelectedTransition(null);
     }
-  }, [selectedTransition, transitionSymbols, transitions, saveToHistory]);
+  }, [selectedTransition, transitionSymbols, saveToHistory]);
 
   const editTransition = useCallback(() => {
     if (selectedTransition) {
-      const tr = transitions.find(t => t.id === selectedTransition);
+      const tr = transitionsRef.current.find(t => t.id === selectedTransition);
       if (tr) {
         setTransitionSymbols(tr.symbols.join(', '));
         setShowEditTransitionDialog(true);
       }
     }
-  }, [selectedTransition, transitions]);
+  }, [selectedTransition]);
 
   const toggleInitial = useCallback(() => {
     if (!selectedState) return;
-    const newStates = statesRef.current.map(s => 
+    const newStates = statesRef.current.map(s =>
       ({ ...s, isInitial: s.id === selectedState ? !s.isInitial : false })
     );
     setStates(newStates);
-    saveToHistory(newStates, transitions);
-  }, [selectedState, transitions, saveToHistory]);
+    saveToHistory(newStates, transitionsRef.current);
+  }, [selectedState, saveToHistory]);
 
   const toggleFinal = useCallback(() => {
     if (!selectedState) return;
-    const newStates = statesRef.current.map(s => 
-      s.id === selectedState ? { ...s, isFinal: !s.isFinal } : s
-    );
+    const newStates = statesRef.current.map(s => s.id === selectedState ? { ...s, isFinal: !s.isFinal } : s);
     setStates(newStates);
-    saveToHistory(newStates, transitions);
-  }, [selectedState, transitions, saveToHistory]);
+    saveToHistory(newStates, transitionsRef.current);
+  }, [selectedState, saveToHistory]);
 
   const simulate = useCallback(() => {
     const initialState = statesRef.current.find(s => s.isInitial);
-    if (!initialState) { 
-      alert('Defina um estado inicial!'); 
-      return; 
+    if (!initialState) {
+      alert('Defina um estado inicial!');
+      return;
     }
 
     const steps: SimulationStep[] = [];
@@ -537,10 +604,10 @@ const AutomatonEditor: React.FC = () => {
 
     for (let i = 0; i < inputString.length; i++) {
       const symbol = inputString[i];
-      const transition = transitions.find(t => 
+      const transition = transitionsRef.current.find(t =>
         t.from === currentState && t.symbols.includes(symbol)
       );
-      
+
       if (!transition) {
         setSimulationResult('rejected');
         setSimulationSteps(steps);
@@ -548,7 +615,7 @@ const AutomatonEditor: React.FC = () => {
         setIsSimulating(true);
         return;
       }
-      
+
       currentState = transition.to;
       remaining = inputString.slice(i + 1);
       steps.push({ currentState, remainingInput: remaining, symbol });
@@ -559,7 +626,7 @@ const AutomatonEditor: React.FC = () => {
     setSimulationSteps(steps);
     setCurrentStepIndex(0);
     setIsSimulating(true);
-  }, [inputString, transitions]);
+  }, [inputString]);
 
   const resetSimulation = useCallback(() => {
     setIsSimulating(false);
@@ -568,6 +635,7 @@ const AutomatonEditor: React.FC = () => {
     setSimulationResult(null);
   }, []);
 
+  // Load with simple validation (avoids crashing on malformed files)
   const loadAutomaton = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -575,13 +643,29 @@ const AutomatonEditor: React.FC = () => {
     reader.onload = (evt) => {
       try {
         const data = JSON.parse(evt.target?.result as string);
-        const loadedStates: State[] = data.states || [];
-        const loadedTransitions: Transition[] = data.transitions || [];
+        // basic validation
+        if (!data || !Array.isArray(data.states) || !Array.isArray(data.transitions)) {
+          throw new Error('Formato inválido: esperava { states: [], transitions: [] }');
+        }
+        const loadedStates: State[] = data.states.map((s: any) => ({
+          id: String(s.id),
+          x: Number(s.x),
+          y: Number(s.y),
+          label: String(s.label ?? ''),
+          isInitial: Boolean(s.isInitial),
+          isFinal: Boolean(s.isFinal)
+        }));
+        const loadedTransitions: Transition[] = data.transitions.map((t: any) => ({
+          id: String(t.id),
+          from: String(t.from),
+          to: String(t.to),
+          symbols: Array.isArray(t.symbols) ? t.symbols.map(String) : []
+        }));
         setStates(loadedStates);
         setTransitions(loadedTransitions);
         saveToHistory(loadedStates, loadedTransitions);
-      } catch {
-        alert('Erro ao carregar arquivo!');
+      } catch (err: any) {
+        alert('Erro ao carregar arquivo: ' + (err?.message || 'arquivo inválido'));
       }
     };
     reader.readAsText(file);
@@ -599,18 +683,18 @@ const AutomatonEditor: React.FC = () => {
     const dx = to.x - from.x, dy = to.y - from.y;
     const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
     const offsetX = (dx / dist) * 40, offsetY = (dy / dist) * 40;
-    const hasReverse = transitions.some(t => t.from === to.id && t.to === from.id);
+    const hasReverse = reverseSetRef.current.has(`${to.id}->${from.id}`);
     if (hasReverse) {
       const midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
       const perpX = -(dy / dist) * 30, perpY = (dx / dist) * 30;
       return `M ${from.x + offsetX} ${from.y + offsetY} Q ${midX + perpX} ${midY + perpY} ${to.x - offsetX} ${to.y - offsetY}`;
     }
     return `M ${from.x + offsetX} ${from.y + offsetY} L ${to.x - offsetX} ${to.y - offsetY}`;
-  }, [transitions]);
+  }, []);
 
   const getTransitionLabelPosition = useCallback((from: State, to: State, isSelfLoop: boolean) => {
     if (isSelfLoop) return { x: from.x - 5, y: from.y - 100 };
-    const hasReverse = transitions.some(t => t.from === to.id && t.to === from.id);
+    const hasReverse = reverseSetRef.current.has(`${to.id}->${from.id}`);
     if (hasReverse) {
       const midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
       const dx = to.x - from.x, dy = to.y - from.y;
@@ -619,7 +703,7 @@ const AutomatonEditor: React.FC = () => {
       return { x: midX + perpX, y: midY + perpY };
     }
     return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
-  }, [transitions]);
+  }, []);
 
   return (
     <div className="w-full h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col">
@@ -717,7 +801,7 @@ const AutomatonEditor: React.FC = () => {
               };
               const newStates = [...states, newState];
               setStates(newStates);
-              saveToHistory(newStates, transitions);
+              saveToHistory(newStates, transitionsRef.current);
             } else {
               setSelectedState(null);
               setSelectedTransition(null);
@@ -959,6 +1043,12 @@ const AutomatonEditor: React.FC = () => {
           )}
 
           <div className="mt-6 bg-slate-700/30 p-3 rounded-lg text-sm text-slate-400">
+            <p className="mb-2"><strong className="text-purple-300">⚡ Ultra-Otimizado:</strong></p>
+            <ul className="space-y-1 list-disc list-inside">
+              <li>Canvas 2D durante drag (60fps garantido)</li>
+              <li>SVG em repouso (visual perfeito)</li>
+              <li>Zero lag, zero bibliotecas extras</li>
+            </ul>
             <p className="mt-3 mb-2"><strong className="text-purple-300">Dicas:</strong></p>
             <ul className="space-y-1 list-disc list-inside">
               <li>Arraste estados ultra-suave</li>
