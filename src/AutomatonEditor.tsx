@@ -3,7 +3,6 @@ import React, {
   useRef,
   useEffect,
   useCallback,
-  useMemo,
   forwardRef
 } from 'react';
 import {
@@ -18,7 +17,10 @@ import {
   Eye,
   Edit2,
   Undo,
-  Redo
+  Redo,
+  ZoomIn,
+  ZoomOut,
+  Crosshair
 } from 'lucide-react';
 
 interface State {
@@ -48,7 +50,11 @@ interface HistoryState {
   transitions: Transition[];
 }
 
-//  OTIMIZAÇÃO StateNode super leve - só re-renderiza quando necessário
+// Config auto-pan durante drag
+const EDGE_PAN_MARGIN = 50; // px a partir da borda
+const EDGE_PAN_SPEED = 14;  // px por evento (ajuste conforme necessário)
+
+// OTIMIZAÇÃO StateNode super leve - só re-renderiza quando necessário
 const StateNode = forwardRef<HTMLDivElement, {
   state: State;
   isActive: boolean;
@@ -115,256 +121,94 @@ const AutomatonEditor: React.FC = () => {
   const [history, setHistory] = useState<HistoryState[]>([]);
   const [historyIndex, setHistoryIndex] = useState(-1);
 
-  //  OTIMIZAÇÃO Estado separado para posições durante drag (não dispara re-render de transições!)
+  // OTIMIZAÇÃO Estado separado para drag + um tick leve para redesenhar SVG enquanto arrasta
   const [isDragging, setIsDragging] = useState(false);
+  const [dragRafTick, setDragRafTick] = useState(0);
+
+  // Zoom & Pan
+  const [scale, setScale] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const MIN_SCALE = 0.3;
+  const MAX_SCALE = 3;
+  const [isPanning, setIsPanning] = useState(false);
+  const [spaceDown, setSpaceDown] = useState(false);
+  const panStartRef = useRef<{ sx: number; sy: number; px: number; py: number } | null>(null);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const canvasOverlayRef = useRef<HTMLCanvasElement | null>(null);
 
   const stateElRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const statesRef = useRef<State[]>(states);
-  const transitionsRef = useRef<Transition[]>(transitions);
-
   useEffect(() => { statesRef.current = states; }, [states]);
-  useEffect(() => { transitionsRef.current = transitions; }, [transitions]);
 
   const draggingRef = useRef<{
     id: string | null;
-    offsetX: number;
-    offsetY: number;
+    startScreenX: number;
+    startScreenY: number;
+    startX: number;
+    startY: number;
     currentX: number;
     currentY: number;
-  }>({ id: null, offsetX: 0, offsetY: 0, currentX: 0, currentY: 0 });
+  }>({ id: null, startScreenX: 0, startScreenY: 0, startX: 0, startY: 0, currentX: 0, currentY: 0 });
 
-  // Indexes e helpers para evitar buscas O(N) em loops
-  const stateByIdRef = useRef<Record<string, State>>({});
-  const transitionsByStateRef = useRef<Record<string, string[]>>({});
-  const reverseSetRef = useRef<Set<string>>(new Set());
-  const idCounterRef = useRef<number>(1); // incremental id generator
-  const historyIndexRef = useRef<number>(historyIndex);
-
-  useEffect(() => { historyIndexRef.current = historyIndex; }, [historyIndex]);
-
-  // build indexes quando states ou transitions mudam
-  useEffect(() => {
-    const sById: Record<string, State> = {};
-    for (const s of statesRef.current) sById[s.id] = s;
-    stateByIdRef.current = sById;
-
-    const tByState: Record<string, string[]> = {};
-    for (const t of transitionsRef.current) {
-      tByState[t.from] ??= [];
-      tByState[t.from].push(t.id);
-      tByState[t.to] ??= [];
-      tByState[t.to].push(t.id);
-    }
-    transitionsByStateRef.current = tByState;
-
-    const rev = new Set<string>();
-    for (const t of transitionsRef.current) rev.add(`${t.to}->${t.from}`);
-    reverseSetRef.current = rev;
-  }, [states, transitions]);
-
-  //  OTIMIZAÇÃO Canvas overlay para desenhar transições durante drag (60fps garantido)
-  // Draw function implemented to use refs (stable) and avoid heavy dependencies
-  const drawTransitionsOnCanvas = useCallback(() => {
-    const canvas = canvasOverlayRef.current;
-    if (!canvas || !isDragging) return;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    // Clear canvas (using CSS pixel size; canvas already scaled by DPR)
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    // Get lookup maps (O(1) access)
-    const stateById = stateByIdRef.current;
-    const transitionsArr = transitionsRef.current;
-    const reverseSet = reverseSetRef.current;
-
-    // Determine which transitions to draw:
-    const draggingId = draggingRef.current.id;
-    let transitionsToDraw: Transition[] = [];
-
-    if (draggingId) {
-      const connectedIds = transitionsByStateRef.current[draggingId] || [];
-      // map ids -> transitions
-      const tMap = Object.fromEntries(transitionsArr.map(t => [t.id, t]));
-      for (const tid of connectedIds) {
-        const t = tMap[tid];
-        if (t) transitionsToDraw.push(t);
-      }
-    } else {
-      transitionsToDraw = transitionsArr;
-    }
-
-    // Provide temporary view of dragged state's position without rebuilding whole states array
-    const dragged = draggingRef.current;
-    // Set common ctx settings once
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.font = 'bold 14px sans-serif';
-    ctx.textAlign = 'center';
-
-    for (const t of transitionsToDraw) {
-      const from = (t.from === dragged.id && dragged.id) ? { ...stateById[t.from], x: dragged.currentX, y: dragged.currentY } : stateById[t.from];
-      const to = (t.to === dragged.id && dragged.id) ? { ...stateById[t.to], x: dragged.currentX, y: dragged.currentY } : stateById[t.to];
-      if (!from || !to) continue;
-
-      const isSelf = t.from === t.to;
-
-      ctx.strokeStyle = selectedTransition === t.id ? '#fbbf24' : '#a78bfa';
-      ctx.lineWidth = selectedTransition === t.id ? 3 : 2;
-      ctx.fillStyle = selectedTransition === t.id ? '#fbbf24' : '#e9d5ff';
-
-      if (isSelf) {
-        // Self loop
-        const loopWidth = 30, loopHeight = 70;
-        ctx.beginPath();
-        ctx.moveTo(from.x + 20, from.y);
-        ctx.bezierCurveTo(
-          from.x + loopWidth, from.y - loopHeight - 50,
-          from.x - loopWidth, from.y - loopHeight - 50,
-          from.x - loopWidth, from.y - loopWidth
-        );
-        ctx.stroke();
-
-        // Label
-        ctx.fillText(t.symbols.join(', '), from.x - 5, from.y - 100);
-      } else {
-        const dx = to.x - from.x, dy = to.y - from.y;
-        const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-        const offsetX = (dx / dist) * 40, offsetY = (dy / dist) * 40;
-        const hasReverse = reverseSet.has(`${t.to}->${t.from}`);
-
-        ctx.beginPath();
-        if (hasReverse) {
-          // Curved transition
-          const midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
-          const perpX = -(dy / dist) * 30, perpY = (dx / dist) * 30;
-          ctx.moveTo(from.x + offsetX, from.y + offsetY);
-          ctx.quadraticCurveTo(midX + perpX, midY + perpY, to.x - offsetX, to.y - offsetY);
-
-          // Label
-          ctx.fillText(t.symbols.join(', '), midX + perpX, midY + perpY);
-        } else {
-          // Straight line
-          ctx.moveTo(from.x + offsetX, from.y + offsetY);
-          ctx.lineTo(to.x - offsetX, to.y - offsetY);
-
-          // Label
-          ctx.fillText(t.symbols.join(', '), (from.x + to.x) / 2, (from.y + to.y) / 2);
-        }
-        ctx.stroke();
-
-        // Arrow head
-        const angle = Math.atan2(dy, dx);
-        const arrowSize = 10;
-        ctx.fillStyle = ctx.strokeStyle;
-        ctx.beginPath();
-        ctx.moveTo(to.x - offsetX, to.y - offsetY);
-        ctx.lineTo(
-          to.x - offsetX - arrowSize * Math.cos(angle - Math.PI / 6),
-          to.y - offsetY - arrowSize * Math.sin(angle - Math.PI / 6)
-        );
-        ctx.lineTo(
-          to.x - offsetX - arrowSize * Math.cos(angle + Math.PI / 6),
-          to.y - offsetY - arrowSize * Math.sin(angle + Math.PI / 6)
-        );
-        ctx.closePath();
-        ctx.fill();
-      }
-    }
-  }, [isDragging, selectedTransition]);
-
-  //  OTIMIZAÇÃO Atualizar canvas em loop RAF durante drag (keeps draw stable)
+  // Tick para redesenhar SVG durante drag (60fps aprox)
   useEffect(() => {
     if (!isDragging) return;
-
-    let rafId = 0;
-    const animate = () => {
-      drawTransitionsOnCanvas();
-      rafId = requestAnimationFrame(animate);
+    let rafId: number;
+    const loop = () => {
+      setDragRafTick(t => (t + 1) % 1_000_000);
+      rafId = requestAnimationFrame(loop);
     };
-
-    rafId = requestAnimationFrame(animate);
+    rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
-  }, [isDragging, drawTransitionsOnCanvas]);
+  }, [isDragging]);
 
-  // Resize canvas to match container and handle DPR
-  useEffect(() => {
-    const updateCanvasSize = () => {
-      const canvas = canvasOverlayRef.current;
-      const container = canvasRef.current;
-      if (!canvas || !container) return;
-
-      const clientWidth = container.clientWidth;
-      const clientHeight = container.clientHeight;
-      const DPR = window.devicePixelRatio || 1;
-
-      canvas.width = Math.floor(clientWidth * DPR);
-      canvas.height = Math.floor(clientHeight * DPR);
-      canvas.style.width = `${clientWidth}px`;
-      canvas.style.height = `${clientHeight}px`;
-
-      const ctx = canvas.getContext('2d');
-      if (ctx) ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  // Helpers para coordenadas lógicas
+  const toLogicalPoint = useCallback((clientX: number, clientY: number) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    const screenX = clientX - rect.left;
+    const screenY = clientY - rect.top;
+    return {
+      x: (screenX - pan.x) / scale,
+      y: (screenY - pan.y) / scale
     };
+  }, [pan.x, pan.y, scale]);
 
-    updateCanvasSize();
-    window.addEventListener('resize', updateCanvasSize);
-    return () => window.removeEventListener('resize', updateCanvasSize);
-  }, []);
-
-  //  OTIMIZAÇÃO Dragging ultra-otimizado - só atualiza transform CSS, não React state
   const saveToHistory = useCallback((newStates: State[], newTransitions: Transition[]) => {
     const snapshot = deepCloneAutomaton(newStates, newTransitions);
     const MAX = 50;
-
     setHistory(prev => {
-      // use historyIndexRef to slice head atomically
-      const head = prev.slice(0, historyIndexRef.current + 1);
-      head.push(snapshot);
-      if (head.length > MAX) head.splice(0, head.length - MAX);
-      // update historyIndexRef to new last index
-      historyIndexRef.current = head.length - 1;
-      // update controlled state for UI
-      setHistoryIndex(historyIndexRef.current);
-      return head;
+      const newHistory = prev.slice(0, historyIndex + 1);
+      newHistory.push(snapshot);
+      if (newHistory.length > MAX) newHistory.splice(0, newHistory.length - MAX);
+      return newHistory;
     });
-  }, []);
+    setHistoryIndex(prev => prev + 1);
+  }, [historyIndex]);
 
   const undo = useCallback(() => {
-    setHistory(prev => {
-      if (historyIndexRef.current > 0) {
-        const newIndex = historyIndexRef.current - 1;
-        const snapshot = prev[newIndex];
-        historyIndexRef.current = newIndex;
-        setHistoryIndex(newIndex);
-        setStates(snapshot.states.map(s => ({ ...s })));
-        setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
-      }
-      return prev;
-    });
-  }, []);
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1;
+      const snapshot = history[newIndex];
+      setHistoryIndex(newIndex);
+      setStates(snapshot.states.map(s => ({ ...s })));
+      setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
+    }
+  }, [history, historyIndex]);
 
   const redo = useCallback(() => {
-    setHistory(prev => {
-      if (historyIndexRef.current < prev.length - 1) {
-        const newIndex = historyIndexRef.current + 1;
-        const snapshot = prev[newIndex];
-        historyIndexRef.current = newIndex;
-        setHistoryIndex(newIndex);
-        setStates(snapshot.states.map(s => ({ ...s })));
-        setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
-      }
-      return prev;
-    });
-  }, []);
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1;
+      const snapshot = history[newIndex];
+      setHistoryIndex(newIndex);
+      setStates(snapshot.states.map(s => ({ ...s })));
+      setTransitions(snapshot.transitions.map(t => ({ ...t, symbols: [...t.symbols] })));
+    }
+  }, [history, historyIndex]);
 
   const saveAutomaton = useCallback(() => {
-    const data = { states: statesRef.current, transitions: transitionsRef.current };
+    const data = { states: statesRef.current, transitions };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -372,33 +216,40 @@ const AutomatonEditor: React.FC = () => {
     a.download = 'automaton.json';
     a.click();
     URL.revokeObjectURL(url);
-  }, []);
+  }, [transitions]);
 
   const deleteSelected = useCallback(() => {
     if (!selectedState) return;
     const newStates = statesRef.current.filter(s => s.id !== selectedState);
-    const newTransitions = transitionsRef.current.filter(t => t.from !== selectedState && t.to !== selectedState);
+    const newTransitions = transitions.filter(t => t.from !== selectedState && t.to !== selectedState);
     setStates(newStates);
     setTransitions(newTransitions);
     saveToHistory(newStates, newTransitions);
     setSelectedState(null);
-  }, [selectedState, saveToHistory]);
+  }, [selectedState, transitions, saveToHistory]);
 
   const deleteTransition = useCallback(() => {
     if (selectedTransition) {
-      const newTransitions = transitionsRef.current.filter(t => t.id !== selectedTransition);
+      const newTransitions = transitions.filter(t => t.id !== selectedTransition);
       setTransitions(newTransitions);
       saveToHistory(statesRef.current, newTransitions);
       setSelectedTransition(null);
     }
-  }, [selectedTransition, saveToHistory]);
+  }, [selectedTransition, transitions, saveToHistory]);
 
+  // Key bindings + Space pan
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        setSpaceDown(true);
+      }
       if (e.ctrlKey || e.metaKey) {
         if (e.key === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
         else if (e.key === 'y' || (e.key === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
         else if (e.key === 's') { e.preventDefault(); saveAutomaton(); }
+        else if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomIn(); }
+        else if (e.key === '-') { e.preventDefault(); zoomOut(); }
+        else if (e.key === '0') { e.preventDefault(); resetView(); }
       }
       if (e.key === 'Delete' && (selectedState || selectedTransition)) {
         e.preventDefault();
@@ -413,10 +264,18 @@ const AutomatonEditor: React.FC = () => {
         setShowEditTransitionDialog(false);
         setSelectedState(null);
         setSelectedTransition(null);
+        setIsPanning(false);
       }
     };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === ' ') setSpaceDown(false);
+    };
     window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
   }, [selectedState, selectedTransition, undo, redo, saveAutomaton, deleteSelected, deleteTransition]);
 
   useEffect(() => {
@@ -428,24 +287,81 @@ const AutomatonEditor: React.FC = () => {
     }
   }, [currentStepIndex, isSimulating, simulationSteps.length]);
 
-  const handleStateMouseDown = useCallback((e: React.MouseEvent, stateId: string) => {
-    if (mode !== 'select') return;
-    e.stopPropagation();
+  // Zoom handlers
+  const zoomIn = useCallback(() => {
+    setScale(prev => Math.min(MAX_SCALE, prev * 1.15));
+  }, []);
+  const zoomOut = useCallback(() => {
+    setScale(prev => Math.max(MIN_SCALE, prev / 1.15));
+  }, []);
+  const resetView = useCallback(() => {
+    setScale(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
 
+  // Wheel zoom centrado no cursor
+  const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (e.ctrlKey) return; // evitar conflito com zoom do browser
+    e.preventDefault();
     const rect = canvasRef.current?.getBoundingClientRect();
     if (!rect) return;
+    const cursorX = e.clientX - rect.left;
+    const cursorY = e.clientY - rect.top;
+    const delta = e.deltaY;
+    const zoomFactor = delta > 0 ? 0.9 : 1.1;
+    const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale * zoomFactor));
+
+    // Mantém ponto do cursor estável
+    const scaleRatio = newScale / scale;
+    const newPanX = cursorX - (cursorX - pan.x) * scaleRatio;
+    const newPanY = cursorY - (cursorY - pan.y) * scaleRatio;
+
+    setPan({ x: newPanX, y: newPanY });
+    setScale(newScale);
+  }, [scale, pan.x, pan.y]);
+
+  // Pan start
+  const beginPan = useCallback((clientX: number, clientY: number) => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    panStartRef.current = {
+      sx: clientX,
+      sy: clientY,
+      px: pan.x,
+      py: pan.y
+    };
+    setIsPanning(true);
+  }, [pan.x, pan.y]);
+
+  const continuePan = useCallback((clientX: number, clientY: number) => {
+    if (!isPanning || !panStartRef.current) return;
+    const { sx, sy, px, py } = panStartRef.current;
+    const dx = clientX - sx;
+    const dy = clientY - sy;
+    setPan({ x: px + dx, y: py + dy });
+  }, [isPanning]);
+
+  const endPan = useCallback(() => {
+    setIsPanning(false);
+    panStartRef.current = null;
+  }, []);
+
+  // Dragging ultra-otimizado - independente do pan + auto-pan
+  const handleStateMouseDown = useCallback((e: React.MouseEvent, stateId: string) => {
+    if (spaceDown || isPanning) return; // não iniciar drag de estado enquanto pan
+    if (mode !== 'select') return;
+    e.stopPropagation();
 
     const st = statesRef.current.find(s => s.id === stateId);
     const el = stateElRefs.current[stateId];
     if (!st || !el) return;
 
-    const offsetX = e.clientX - rect.left - st.x;
-    const offsetY = e.clientY - rect.top - st.y;
-
     draggingRef.current = {
       id: stateId,
-      offsetX,
-      offsetY,
+      startScreenX: e.clientX,
+      startScreenY: e.clientY,
+      startX: st.x,
+      startY: st.y,
       currentX: st.x,
       currentY: st.y
     };
@@ -456,23 +372,39 @@ const AutomatonEditor: React.FC = () => {
       const drag = draggingRef.current;
       if (!drag.id) return;
 
-      const rectCanvas = canvasRef.current?.getBoundingClientRect();
-      if (!rectCanvas) return;
+      // Autopan quando cursor chega perto das bordas do container
+      const containerRect = canvasRef.current?.getBoundingClientRect();
+      if (containerRect) {
+        let panDX = 0;
+        let panDY = 0;
+        if (ev.clientX - containerRect.left < EDGE_PAN_MARGIN) panDX = EDGE_PAN_SPEED;
+        else if (containerRect.right - ev.clientX < EDGE_PAN_MARGIN) panDX = -EDGE_PAN_SPEED;
 
-      const px = ev.clientX - rectCanvas.left;
-      const py = ev.clientY - rectCanvas.top;
-      const desiredX = px - drag.offsetX;
-      const desiredY = py - drag.offsetY;
+        if (ev.clientY - containerRect.top < EDGE_PAN_MARGIN) panDY = EDGE_PAN_SPEED;
+        else if (containerRect.bottom - ev.clientY < EDGE_PAN_MARGIN) panDY = -EDGE_PAN_SPEED;
 
-      // Atualizar posição temporária
+        if (panDX !== 0 || panDY !== 0) {
+          setPan(prev => ({ x: prev.x + panDX, y: prev.y + panDY }));
+          // Compensa o delta de pan na origem do drag para manter o nó sob o cursor
+          draggingRef.current.startScreenX += panDX;
+          draggingRef.current.startScreenY += panDY;
+        }
+      }
+
+      // Calcula posição desejada em função do delta de tela e do zoom (independente do pan)
+      const deltaScreenX = ev.clientX - drag.startScreenX;
+      const deltaScreenY = ev.clientY - drag.startScreenY;
+      const desiredX = drag.startX + (deltaScreenX / scale);
+      const desiredY = drag.startY + (deltaScreenY / scale);
+
       drag.currentX = desiredX;
       drag.currentY = desiredY;
 
-      const stRef = statesRef.current.find(s => s.id === drag.id);
-      if (!stRef) return;
+      const stLocal = statesRef.current.find(s => s.id === drag.id);
+      if (!stLocal) return;
 
-      const deltaX = desiredX - stRef.x;
-      const deltaY = desiredY - stRef.y;
+      const deltaX = desiredX - stLocal.x;
+      const deltaY = desiredY - stLocal.y;
 
       const elToMove = stateElRefs.current[drag.id];
       if (elToMove) {
@@ -480,30 +412,31 @@ const AutomatonEditor: React.FC = () => {
       }
     };
 
-    const onUp = (ev?: MouseEvent) => {
+    const onUp = () => {
       const drag = draggingRef.current;
 
       if (!drag.id) {
-        window.removeEventListener('mousemove', onMove);
-        window.removeEventListener('mouseup', onUp);
-        setIsDragging(false);
+        cleanup();
         return;
       }
 
       const movedEl = stateElRefs.current[drag.id];
       if (movedEl) movedEl.style.transform = '';
 
-      // Só agora atualizar React state (dispara re-render das transições)
       setStates(prev => {
         const newStates = prev.map(s =>
           s.id === drag.id ? { ...s, x: drag.currentX, y: drag.currentY } : s
         );
         statesRef.current = newStates;
-        saveToHistory(newStates, transitionsRef.current);
+        saveToHistory(newStates, transitions);
         return newStates;
       });
 
-      draggingRef.current = { id: null, offsetX: 0, offsetY: 0, currentX: 0, currentY: 0 };
+      draggingRef.current = { id: null, startScreenX: 0, startScreenY: 0, startX: 0, startY: 0, currentX: 0, currentY: 0 };
+      cleanup();
+    };
+
+    const cleanup = () => {
       setIsDragging(false);
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
@@ -511,7 +444,7 @@ const AutomatonEditor: React.FC = () => {
 
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [mode, saveToHistory]);
+  }, [mode, transitions, saveToHistory, scale, spaceDown, isPanning]);
 
   const handleTransitionClick = useCallback((e: React.MouseEvent, transitionId: string) => {
     e.stopPropagation();
@@ -524,16 +457,15 @@ const AutomatonEditor: React.FC = () => {
   const addTransition = useCallback(() => {
     if (transitionFrom && transitionTo && transitionSymbols.trim()) {
       const symbols = transitionSymbols.split(',').map(s => s.trim()).filter(s => s);
-      const existing = transitionsRef.current.find(t => t.from === transitionFrom && t.to === transitionTo);
+      const existing = transitions.find(t => t.from === transitionFrom && t.to === transitionTo);
       let newTransitions: Transition[];
       if (existing) {
-        newTransitions = transitionsRef.current.map(t =>
+        newTransitions = transitions.map(t =>
           t.id === existing.id ? { ...t, symbols: Array.from(new Set([...t.symbols, ...symbols])) } : t
         );
       } else {
-        const newId = `t${idCounterRef.current++}`;
-        newTransitions = [...transitionsRef.current, {
-          id: newId,
+        newTransitions = [...transitions, {
+          id: `t${Date.now()}`,
           from: transitionFrom,
           to: transitionTo,
           symbols
@@ -547,12 +479,12 @@ const AutomatonEditor: React.FC = () => {
     setTransitionSymbols('');
     setShowTransitionDialog(false);
     setMode('select');
-  }, [transitionFrom, transitionTo, transitionSymbols, saveToHistory]);
+  }, [transitionFrom, transitionTo, transitionSymbols, transitions, saveToHistory]);
 
   const updateTransition = useCallback(() => {
     if (selectedTransition && transitionSymbols.trim()) {
       const symbols = transitionSymbols.split(',').map(s => s.trim()).filter(s => s);
-      const newTransitions = transitionsRef.current.map(t =>
+      const newTransitions = transitions.map(t =>
         t.id === selectedTransition ? { ...t, symbols } : t
       );
       setTransitions(newTransitions);
@@ -561,17 +493,17 @@ const AutomatonEditor: React.FC = () => {
       setTransitionSymbols('');
       setSelectedTransition(null);
     }
-  }, [selectedTransition, transitionSymbols, saveToHistory]);
+  }, [selectedTransition, transitionSymbols, transitions, saveToHistory]);
 
   const editTransition = useCallback(() => {
     if (selectedTransition) {
-      const tr = transitionsRef.current.find(t => t.id === selectedTransition);
+      const tr = transitions.find(t => t.id === selectedTransition);
       if (tr) {
         setTransitionSymbols(tr.symbols.join(', '));
         setShowEditTransitionDialog(true);
       }
     }
-  }, [selectedTransition]);
+  }, [selectedTransition, transitions]);
 
   const toggleInitial = useCallback(() => {
     if (!selectedState) return;
@@ -579,15 +511,17 @@ const AutomatonEditor: React.FC = () => {
       ({ ...s, isInitial: s.id === selectedState ? !s.isInitial : false })
     );
     setStates(newStates);
-    saveToHistory(newStates, transitionsRef.current);
-  }, [selectedState, saveToHistory]);
+    saveToHistory(newStates, transitions);
+  }, [selectedState, transitions, saveToHistory]);
 
   const toggleFinal = useCallback(() => {
     if (!selectedState) return;
-    const newStates = statesRef.current.map(s => s.id === selectedState ? { ...s, isFinal: !s.isFinal } : s);
+    const newStates = statesRef.current.map(s =>
+      s.id === selectedState ? { ...s, isFinal: !s.isFinal } : s
+    );
     setStates(newStates);
-    saveToHistory(newStates, transitionsRef.current);
-  }, [selectedState, saveToHistory]);
+    saveToHistory(newStates, transitions);
+  }, [selectedState, transitions, saveToHistory]);
 
   const simulate = useCallback(() => {
     const initialState = statesRef.current.find(s => s.isInitial);
@@ -604,7 +538,7 @@ const AutomatonEditor: React.FC = () => {
 
     for (let i = 0; i < inputString.length; i++) {
       const symbol = inputString[i];
-      const transition = transitionsRef.current.find(t =>
+      const transition = transitions.find(t =>
         t.from === currentState && t.symbols.includes(symbol)
       );
 
@@ -626,7 +560,7 @@ const AutomatonEditor: React.FC = () => {
     setSimulationSteps(steps);
     setCurrentStepIndex(0);
     setIsSimulating(true);
-  }, [inputString]);
+  }, [inputString, transitions]);
 
   const resetSimulation = useCallback(() => {
     setIsSimulating(false);
@@ -635,7 +569,6 @@ const AutomatonEditor: React.FC = () => {
     setSimulationResult(null);
   }, []);
 
-  // Load with simple validation (avoids crashing on malformed files)
   const loadAutomaton = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -643,29 +576,13 @@ const AutomatonEditor: React.FC = () => {
     reader.onload = (evt) => {
       try {
         const data = JSON.parse(evt.target?.result as string);
-        // basic validation
-        if (!data || !Array.isArray(data.states) || !Array.isArray(data.transitions)) {
-          throw new Error('Formato inválido: esperava { states: [], transitions: [] }');
-        }
-        const loadedStates: State[] = data.states.map((s: any) => ({
-          id: String(s.id),
-          x: Number(s.x),
-          y: Number(s.y),
-          label: String(s.label ?? ''),
-          isInitial: Boolean(s.isInitial),
-          isFinal: Boolean(s.isFinal)
-        }));
-        const loadedTransitions: Transition[] = data.transitions.map((t: any) => ({
-          id: String(t.id),
-          from: String(t.from),
-          to: String(t.to),
-          symbols: Array.isArray(t.symbols) ? t.symbols.map(String) : []
-        }));
+        const loadedStates: State[] = data.states || [];
+        const loadedTransitions: Transition[] = data.transitions || [];
         setStates(loadedStates);
         setTransitions(loadedTransitions);
         saveToHistory(loadedStates, loadedTransitions);
-      } catch (err: any) {
-        alert('Erro ao carregar arquivo: ' + (err?.message || 'arquivo inválido'));
+      } catch {
+        alert('Erro ao carregar arquivo!');
       }
     };
     reader.readAsText(file);
@@ -673,7 +590,15 @@ const AutomatonEditor: React.FC = () => {
 
   const currentSimState = simulationSteps[currentStepIndex]?.currentState;
 
-  // Funções para cálculo de transições SVG (só usadas quando NÃO está dragging)
+  // Estado efetivo para desenhar (usa posições de drag quando aplicável)
+  const getEffectiveState = useCallback((s: State): State => {
+    if (isDragging && draggingRef.current.id === s.id) {
+      return { ...s, x: draggingRef.current.currentX, y: draggingRef.current.currentY };
+    }
+    return s;
+  }, [isDragging, dragRafTick]); // dragRafTick força recomputar durante drag
+
+  // Funções para cálculo de transições SVG
   const getTransitionPath = useCallback((from: State, to: State, isSelfLoop: boolean) => {
     if (isSelfLoop) {
       const loopWidth = 30, loopHeight = 70;
@@ -683,18 +608,18 @@ const AutomatonEditor: React.FC = () => {
     const dx = to.x - from.x, dy = to.y - from.y;
     const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
     const offsetX = (dx / dist) * 40, offsetY = (dy / dist) * 40;
-    const hasReverse = reverseSetRef.current.has(`${to.id}->${from.id}`);
+    const hasReverse = transitions.some(t => t.from === to.id && t.to === from.id);
     if (hasReverse) {
       const midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
       const perpX = -(dy / dist) * 30, perpY = (dx / dist) * 30;
       return `M ${from.x + offsetX} ${from.y + offsetY} Q ${midX + perpX} ${midY + perpY} ${to.x - offsetX} ${to.y - offsetY}`;
     }
     return `M ${from.x + offsetX} ${from.y + offsetY} L ${to.x - offsetX} ${to.y - offsetY}`;
-  }, []);
+  }, [transitions]);
 
   const getTransitionLabelPosition = useCallback((from: State, to: State, isSelfLoop: boolean) => {
     if (isSelfLoop) return { x: from.x - 5, y: from.y - 100 };
-    const hasReverse = reverseSetRef.current.has(`${to.id}->${from.id}`);
+    const hasReverse = transitions.some(t => t.from === to.id && t.to === from.id);
     if (hasReverse) {
       const midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
       const dx = to.x - from.x, dy = to.y - from.y;
@@ -703,7 +628,7 @@ const AutomatonEditor: React.FC = () => {
       return { x: midX + perpX, y: midY + perpY };
     }
     return { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
-  }, []);
+  }, [transitions]);
 
   return (
     <div className="w-full h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col">
@@ -713,33 +638,33 @@ const AutomatonEditor: React.FC = () => {
         </h1>
 
         <div className="flex flex-wrap gap-2">
-          <button 
-            onClick={() => setMode('select')} 
+          <button
+            onClick={() => setMode('select')}
             className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              mode === 'select' 
-                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50' 
+              mode === 'select'
+                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
             }`}
           >
             Selecionar
           </button>
-          
-          <button 
-            onClick={() => setMode('addState')} 
+
+          <button
+            onClick={() => setMode('addState')}
             className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${
-              mode === 'addState' 
-                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50' 
+              mode === 'addState'
+                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
             }`}
           >
             <Plus size={18} /> Adicionar Estado
           </button>
-          
-          <button 
-            onClick={() => setMode('addTransition')} 
+
+          <button
+            onClick={() => setMode('addTransition')}
             className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              mode === 'addTransition' 
-                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50' 
+              mode === 'addTransition'
+                ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
             }`}
           >
@@ -748,19 +673,19 @@ const AutomatonEditor: React.FC = () => {
 
           <div className="border-l border-slate-600 mx-2"></div>
 
-          <button 
-            onClick={undo} 
-            disabled={historyIndex <= 0} 
-            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" 
+          <button
+            onClick={undo}
+            disabled={historyIndex <= 0}
+            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Desfazer (Ctrl+Z)"
           >
             <Undo size={18} />
           </button>
-          
-          <button 
-            onClick={redo} 
-            disabled={historyIndex >= history.length - 1} 
-            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" 
+
+          <button
+            onClick={redo}
+            disabled={historyIndex >= history.length - 1}
+            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Refazer (Ctrl+Y)"
           >
             <Redo size={18} />
@@ -768,134 +693,186 @@ const AutomatonEditor: React.FC = () => {
 
           <div className="border-l border-slate-600 mx-2"></div>
 
-          <button 
-            onClick={saveAutomaton} 
-            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-all flex items-center gap-2" 
+          <button
+            onClick={saveAutomaton}
+            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-all flex items-center gap-2"
             title="Salvar (Ctrl+S)"
           >
             <Save size={18} /> Salvar
           </button>
-          
+
           <label className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 transition-all flex items-center gap-2 cursor-pointer">
             <Upload size={18} /> Carregar
             <input type="file" accept=".json" onChange={loadAutomaton} className="hidden" />
           </label>
+
+          <div className="border-l border-slate-600 mx-2"></div>
+
+          {/* Zoom & Pan Controls */}
+          <button
+            onClick={zoomIn}
+            className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
+            title="Zoom In (Ctrl + +)"
+          >
+            <ZoomIn size={18} />
+          </button>
+          <button
+            onClick={zoomOut}
+            className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
+            title="Zoom Out (Ctrl + -)"
+          >
+            <ZoomOut size={18} />
+          </button>
+          <button
+            onClick={resetView}
+            className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
+            title="Reset View (Ctrl + 0)"
+          >
+            <Crosshair size={18} /> Reset
+          </button>
+          <div className="flex items-center text-xs text-slate-400 ml-2 select-none">
+            Zoom: {(scale * 100).toFixed(0)}%
+          </div>
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        <div 
-          ref={canvasRef} 
-          className="flex-1 relative cursor-crosshair overflow-hidden" 
-          onClick={(e) => {
+        <div
+          ref={canvasRef}
+          className="flex-1 relative overflow-hidden"
+          onWheel={handleWheel}
+          onMouseDown={(e) => {
+            // Início do pan (space ou botão do meio)
+            if (spaceDown || e.button === 1) {
+              beginPan(e.clientX, e.clientY);
+              return;
+            }
             if (mode === 'addState') {
-              const rect = canvasRef.current?.getBoundingClientRect();
-              if (!rect) return;
+              const logical = toLogicalPoint(e.clientX, e.clientY);
               const newState: State = {
                 id: `q${states.length}`,
-                x: e.clientX - rect.left,
-                y: e.clientY - rect.top,
+                x: logical.x,
+                y: logical.y,
                 label: `q${states.length}`,
                 isInitial: states.length === 0,
                 isFinal: false
               };
               const newStates = [...states, newState];
               setStates(newStates);
-              saveToHistory(newStates, transitionsRef.current);
-            } else {
+              saveToHistory(newStates, transitions);
+            } else if (!isPanning) {
               setSelectedState(null);
               setSelectedTransition(null);
             }
           }}
+          onMouseMove={(e) => {
+            if (isPanning) {
+              continuePan(e.clientX, e.clientY);
+            }
+          }}
+          onMouseUp={() => {
+            if (isPanning) endPan();
+          }}
+          onMouseLeave={() => {
+            if (isPanning) endPan();
+          }}
+          style={{ cursor: spaceDown || isPanning ? 'grab' : mode === 'addState' ? 'crosshair' : 'default' }}
         >
-          {/* Canvas overlay para transições durante drag */}
-          <canvas
-            ref={canvasOverlayRef}
-            className="absolute inset-0 pointer-events-none"
-            style={{ opacity: isDragging ? 1 : 0, transition: 'opacity 0.1s' }}
-          />
-
-          {/* SVG para transições quando NÃO está dragging */}
-          <svg 
-            ref={svgRef} 
-            className="absolute inset-0 w-full h-full pointer-events-none"
-            style={{ opacity: isDragging ? 0 : 1, transition: 'opacity 0.1s' }}
+          {/* Wrapper transform (pan + scale) */}
+          <div
+            className="absolute inset-0"
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${scale})`,
+              transformOrigin: '0 0',
+              willChange: 'transform'
+            }}
           >
-            <defs>
-              <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" fill="#a78bfa">
-                <polygon points="0 0, 10 3, 0 6" />
-              </marker>
-              <marker id="arrowhead-selected" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" fill="#fbbf24">
-                <polygon points="0 0, 10 3, 0 6" />
-              </marker>
-            </defs>
+            {/* SVG para transições (sempre visível) */}
+            <svg
+              ref={svgRef}
+              className="absolute inset-0 w-full h-full"
+              style={{ overflow: 'visible' }}
+            >
+              <defs>
+                <marker id="arrowhead" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" fill="#a78bfa">
+                  <polygon points="0 0, 10 3, 0 6" />
+                </marker>
+                <marker id="arrowhead-selected" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" fill="#fbbf24">
+                  <polygon points="0 0, 10 3, 0 6" />
+                </marker>
+              </defs>
 
-            {transitions.map(t => {
-              const from = states.find(s => s.id === t.from);
-              const to = states.find(s => s.id === t.to);
-              if (!from || !to) return null;
-              const isSelf = t.from === t.to;
-              const path = getTransitionPath(from, to, isSelf);
-              const labelPos = getTransitionLabelPosition(from, to, isSelf);
-              const isSel = selectedTransition === t.id;
-              
+              {transitions.map(t => {
+                const rawFrom = states.find(s => s.id === t.from);
+                const rawTo = states.find(s => s.id === t.to);
+                if (!rawFrom || !rawTo) return null;
+
+                const from = getEffectiveState(rawFrom);
+                const to = getEffectiveState(rawTo);
+                const isSelf = t.from === t.to;
+                const path = getTransitionPath(from, to, isSelf);
+                const labelPos = getTransitionLabelPosition(from, to, isSelf);
+                const isSel = selectedTransition === t.id;
+
+                return (
+                  <g key={t.id} className="pointer-events-none">
+                    <path
+                      d={path}
+                      stroke={isSel ? '#fbbf24' : '#a78bfa'}
+                      strokeWidth={isSel ? 3 : 2}
+                      fill="none"
+                      markerEnd={isSel ? 'url(#arrowhead-selected)' : 'url(#arrowhead)'}
+                      className="transition-none"
+                      // Habilitar clique na stroke
+                      style={{ pointerEvents: 'stroke' }}
+                      onClick={(e) => handleTransitionClick(e as unknown as React.MouseEvent, t.id)}
+                    />
+                    <text
+                      x={labelPos.x}
+                      y={labelPos.y}
+                      fill={isSel ? '#fbbf24' : '#e9d5ff'}
+                      fontSize={14}
+                      fontWeight="bold"
+                      textAnchor="middle"
+                      className="select-none pointer-events-none"
+                    >
+                      {t.symbols.join(', ')}
+                    </text>
+                  </g>
+                );
+              })}
+            </svg>
+
+            {states.map(state => {
+              const isActive = isSimulating && currentSimState === state.id;
+              const isSel = selectedState === state.id;
+
               return (
-                <g key={t.id}>
-                  <path
-                    d={path}
-                    stroke={isSel ? '#fbbf24' : '#a78bfa'}
-                    strokeWidth={isSel ? '3' : '2'}
-                    fill="none"
-                    markerEnd={isSel ? 'url(#arrowhead-selected)' : 'url(#arrowhead)'}
-                    className="transition-all cursor-pointer"
-                    style={{ pointerEvents: 'stroke' }}
-                    onClick={(e) => handleTransitionClick(e, t.id)}
-                  />
-                  <text
-                    x={labelPos.x}
-                    y={labelPos.y}
-                    fill={isSel ? '#fbbf24' : '#e9d5ff'}
-                    fontSize={14}
-                    fontWeight="bold"
-                    textAnchor="middle"
-                    className="pointer-events-none select-none"
-                  >
-                    {t.symbols.join(', ')}
-                  </text>
-                </g>
+                <StateNode
+                  key={state.id}
+                  ref={(el) => { stateElRefs.current[state.id] = el; }}
+                  state={state}
+                  isActive={isActive}
+                  isSelected={isSel}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (mode === 'select') {
+                      setSelectedState(state.id);
+                      setSelectedTransition(null);
+                    } else if (mode === 'addTransition') {
+                      if (!transitionFrom) {
+                        setTransitionFrom(state.id);
+                      } else {
+                        setTransitionTo(state.id);
+                        setShowTransitionDialog(true);
+                      }
+                    }
+                  }}
+                  onMouseDown={handleStateMouseDown}
+                />
               );
             })}
-          </svg>
-
-          {states.map(state => {
-            const isActive = isSimulating && currentSimState === state.id;
-            const isSel = selectedState === state.id;
-            
-            return (
-              <StateNode
-                key={state.id}
-                ref={(el) => { stateElRefs.current[state.id] = el; }}
-                state={state}
-                isActive={isActive}
-                isSelected={isSel}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (mode === 'select') {
-                    setSelectedState(state.id);
-                    setSelectedTransition(null);
-                  } else if (mode === 'addTransition') {
-                    if (!transitionFrom) {
-                      setTransitionFrom(state.id);
-                    } else {
-                      setTransitionTo(state.id);
-                      setShowTransitionDialog(true);
-                    }
-                  }
-                }}
-                onMouseDown={handleStateMouseDown}
-              />
-            );
-          })}
+          </div>
         </div>
 
         <div className="w-80 bg-slate-800/50 backdrop-blur-lg border-l border-purple-500/30 p-4 overflow-y-auto">
@@ -906,29 +883,29 @@ const AutomatonEditor: React.FC = () => {
               <div className="bg-slate-700/50 p-3 rounded-lg">
                 <p className="text-slate-300 font-medium mb-2">Estado: {selectedState}</p>
                 <div className="flex gap-2 mb-2">
-                  <button 
-                    onClick={toggleInitial} 
+                  <button
+                    onClick={toggleInitial}
                     className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${
-                      states.find(s => s.id === selectedState)?.isInitial 
-                        ? 'bg-blue-600 text-white' 
+                      states.find(s => s.id === selectedState)?.isInitial
+                        ? 'bg-blue-600 text-white'
                         : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
                     }`}
                   >
                     Inicial
                   </button>
-                  <button 
-                    onClick={toggleFinal} 
+                  <button
+                    onClick={toggleFinal}
                     className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${
-                      states.find(s => s.id === selectedState)?.isFinal 
-                        ? 'bg-yellow-600 text-white' 
+                      states.find(s => s.id === selectedState)?.isFinal
+                        ? 'bg-yellow-600 text-white'
                         : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
                     }`}
                   >
                     Final
                   </button>
                 </div>
-                <button 
-                  onClick={deleteSelected} 
+                <button
+                  onClick={deleteSelected}
                   className="w-full px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all flex items-center justify-center gap-2"
                 >
                   <Trash2 size={16} /> Deletar Estado
@@ -942,14 +919,14 @@ const AutomatonEditor: React.FC = () => {
               <div className="bg-slate-700/50 p-3 rounded-lg">
                 <p className="text-slate-300 font-medium mb-2">Transição Selecionada</p>
                 <div className="flex gap-2">
-                  <button 
-                    onClick={editTransition} 
+                  <button
+                    onClick={editTransition}
                     className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all flex items-center justify-center gap-2"
                   >
                     <Edit2 size={16} /> Editar
                   </button>
-                  <button 
-                    onClick={deleteTransition} 
+                  <button
+                    onClick={deleteTransition}
                     className="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all flex items-center justify-center gap-2"
                   >
                     <Trash2 size={16} /> Deletar
@@ -960,27 +937,27 @@ const AutomatonEditor: React.FC = () => {
           )}
 
           <div className="bg-slate-700/50 p-4 rounded-lg mb-4">
-            <h3 className="text-lg font-semibold text-purple-300 mb-3 flex items-center gap-2">
+            <h3 className="text-lg font-semibold text-purple-300 mb-3 flex items中心 gap-2">
               <Play size={18} /> Simulação
             </h3>
-            <input 
-              type="text" 
-              value={inputString} 
-              onChange={(e) => setInputString(e.target.value)} 
-              placeholder="Cadeia de entrada" 
-              className="w-full px-3 py-2 bg-slate-600 text-white rounded-lg mb-3 focus:outline-none focus:ring-2 focus:ring-purple-500" 
-              disabled={isSimulating} 
+            <input
+              type="text"
+              value={inputString}
+              onChange={(e) => setInputString(e.target.value)}
+              placeholder="Cadeia de entrada"
+              className="w-full px-3 py-2 bg-slate-600 text-white rounded-lg mb-3 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              disabled={isSimulating}
             />
             <div className="flex gap-2">
-              <button 
-                onClick={simulate} 
-                disabled={isSimulating || !inputString} 
+              <button
+                onClick={simulate}
+                disabled={isSimulating || !inputString}
                 className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 <Play size={16} /> Simular
               </button>
-              <button 
-                onClick={resetSimulation} 
+              <button
+                onClick={resetSimulation}
                 className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all"
               >
                 <RotateCcw size={16} />
@@ -995,11 +972,11 @@ const AutomatonEditor: React.FC = () => {
               </h3>
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {simulationSteps.slice(0, currentStepIndex + 1).map((step, index) => (
-                  <div 
-                    key={index} 
+                  <div
+                    key={index}
                     className={`p-2 rounded-lg ${
-                      index === currentStepIndex 
-                        ? 'bg-purple-600/30 border border-purple-500' 
+                      index === currentStepIndex
+                        ? 'bg-purple-600/30 border border-purple-500'
                         : 'bg-slate-600/30'
                     }`}
                   >
@@ -1019,10 +996,10 @@ const AutomatonEditor: React.FC = () => {
               </div>
 
               {!isSimulating && simulationResult && (
-                <div 
+                <div
                   className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${
-                    simulationResult === 'accepted' 
-                      ? 'bg-green-600/30 border border-green-500' 
+                    simulationResult === 'accepted'
+                      ? 'bg-green-600/30 border border-green-500'
                       : 'bg-red-600/30 border border-red-500'
                   }`}
                 >
@@ -1043,14 +1020,11 @@ const AutomatonEditor: React.FC = () => {
           )}
 
           <div className="mt-6 bg-slate-700/30 p-3 rounded-lg text-sm text-slate-400">
-            <p className="mb-2"><strong className="text-purple-300">⚡ Ultra-Otimizado:</strong></p>
-            <ul className="space-y-1 list-disc list-inside">
-              <li>Canvas 2D durante drag (60fps garantido)</li>
-              <li>SVG em repouso (visual perfeito)</li>
-              <li>Zero lag, zero bibliotecas extras</li>
-            </ul>
             <p className="mt-3 mb-2"><strong className="text-purple-300">Dicas:</strong></p>
             <ul className="space-y-1 list-disc list-inside">
+              <li>Use a roda do mouse para dar zoom</li>
+              <li>Segure a barra de espaço ou o botão do meio para mover (pan)</li>
+              <li>Ctrl + + / - / 0 para zoom in/out/reset</li>
               <li>Arraste estados ultra-suave</li>
               <li>Ctrl+Z desfazer, Ctrl+Y refazer</li>
               <li>Delete para remover</li>
@@ -1068,13 +1042,13 @@ const AutomatonEditor: React.FC = () => {
               De <span className="text-purple-400 font-bold">{transitionFrom}</span> para{' '}
               <span className="text-purple-400 font-bold">{transitionTo}</span>
             </p>
-            <input 
-              type="text" 
-              value={transitionSymbols} 
-              onChange={(e) => setTransitionSymbols(e.target.value)} 
-              placeholder="Símbolos separados por vírgula (ex: a, b, 0)" 
-              className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-purple-500" 
-              autoFocus 
+            <input
+              type="text"
+              value={transitionSymbols}
+              onChange={(e) => setTransitionSymbols(e.target.value)}
+              placeholder="Símbolos separados por vírgula (ex: a, b, 0)"
+              className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') addTransition();
                 if (e.key === 'Escape') {
@@ -1084,26 +1058,26 @@ const AutomatonEditor: React.FC = () => {
                   setTransitionSymbols('');
                   setMode('select');
                 }
-              }} 
+              }}
             />
             <p className="text-slate-500 text-xs mb-4">
               Dica: Use vírgulas para adicionar múltiplas entradas na mesma transição
             </p>
             <div className="flex gap-2">
-              <button 
-                onClick={addTransition} 
+              <button
+                onClick={addTransition}
                 className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all font-medium"
               >
                 Adicionar
               </button>
-              <button 
+              <button
                 onClick={() => {
                   setShowTransitionDialog(false);
                   setTransitionFrom(null);
                   setTransitionTo(null);
                   setTransitionSymbols('');
                   setMode('select');
-                }} 
+                }}
                 className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all"
               >
                 Cancelar
@@ -1117,36 +1091,36 @@ const AutomatonEditor: React.FC = () => {
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-slate-800 p-6 rounded-xl shadow-2xl border border-purple-500/30 w-96">
             <h3 className="text-xl font-bold text-purple-300 mb-4">Editar Transição</h3>
-            <input 
-              type="text" 
-              value={transitionSymbols} 
-              onChange={(e) => setTransitionSymbols(e.target.value)} 
-              placeholder="Símbolos separados por vírgula (ex: a, b, 0)" 
-              className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-purple-500" 
-              autoFocus 
+            <input
+              type="text"
+              value={transitionSymbols}
+              onChange={(e) => setTransitionSymbols(e.target.value)}
+              placeholder="Símbolos separados por vírgula (ex: a, b, 0)"
+              className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-purple-500"
+              autoFocus
               onKeyDown={(e) => {
                 if (e.key === 'Enter') updateTransition();
                 if (e.key === 'Escape') {
                   setShowEditTransitionDialog(false);
                   setTransitionSymbols('');
                 }
-              }} 
+              }}
             />
             <p className="text-slate-500 text-xs mb-4">
               Dica: Use vírgulas para adicionar múltiplas entradas na mesma transição
             </p>
             <div className="flex gap-2">
-              <button 
-                onClick={updateTransition} 
+              <button
+                onClick={updateTransition}
                 className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all font-medium"
               >
                 Salvar
               </button>
-              <button 
+              <button
                 onClick={() => {
                   setShowEditTransitionDialog(false);
                   setTransitionSymbols('');
-                }} 
+                }}
                 className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all"
               >
                 Cancelar
