@@ -1,8 +1,8 @@
 import React, { forwardRef } from 'react';
-import { State } from '../../core/automata/base/types';
+import { BaseState } from '../../core/automata/base/types';
 
 export const StateNode = forwardRef<HTMLDivElement, {
-  state: State;
+  state: BaseState;
   isActive: boolean;
   isSelected: boolean;
   onClick: (e: React.MouseEvent, id: string) => void;
@@ -44,4 +44,5 @@ export const StateNode = forwardRef<HTMLDivElement, {
     </div>
   );
 });
+
 StateNode.displayName = 'StateNode';

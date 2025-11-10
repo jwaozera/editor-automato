@@ -1,54 +1,91 @@
-import { AutomatonFactory, AutomatonSnapshot, SimulationResult, Transition } from '../base/types';
+import { AutomatonFactory, AutomatonSnapshot, SimulationResult } from '../base/types';
 
 export const dfaFactory: AutomatonFactory = {
   config: {
     type: 'dfa',
-    displayName: 'Autômato Finito Determinístico',
-    normalizeTransition: (t: Transition) => {
-      const unique = Array.from(new Set(t.symbols.map(s => s.trim()).filter(Boolean)));
-      return { ...t, symbols: unique };
+    displayName: 'DFA (Determinístico)',
+    capabilities: {},
+    normalizeTransition: (t) => {
+      if (!t.symbols) t.symbols = [];
+      t.symbols = Array.from(new Set(t.symbols.map(s => s.trim()).filter(Boolean)));
+      return t;
     },
-    formatTransitionLabel: (t: Transition) => t.symbols.join(', '),
+    validateAddTransition: (snapshot, newT) => {
+      if (!newT.symbols) return null;
+      for (const symbol of newT.symbols) {
+        const conflict = snapshot.transitions.find(
+          tr => tr.from === newT.from && tr.symbols?.includes(symbol) && tr.id !== newT.id
+        );
+        if (conflict) return `Símbolo '${symbol}' já usado a partir de ${newT.from}.`;
+      }
+      return null;
+    },
+    formatTransitionLabel: (t) => (t.symbols || []).join(', '),
     createState: (index, x, y) => ({
       id: `q${index}`,
       label: `q${index}`,
-      x,
-      y,
+      x, y,
       isInitial: index === 0,
       isFinal: false
-    })
+    }),
+    defaultMeta: {}
   },
   createEmpty: (): AutomatonSnapshot => ({
+    type: 'dfa',
+    meta: {},
     states: [],
     transitions: []
   }),
   simulate(snapshot, input): SimulationResult {
     const initial = snapshot.states.find(s => s.isInitial);
-    if (!initial) {
-      return { steps: [], status: 'rejected' };
-    }
+    if (!initial) return { steps: [], status: 'rejected' };
 
     const steps = [];
-    let currentState = initial.id;
+    let current = initial.id;
     let remaining = input;
-
-    steps.push({ currentState, remainingInput: remaining, symbol: '' });
+    steps.push({ currentState: current, remainingInput: remaining });
 
     for (let i = 0; i < input.length; i++) {
       const symbol = input[i];
-      const transition = snapshot.transitions.find(
-        t => t.from === currentState && t.symbols.includes(symbol)
+      const tr = snapshot.transitions.find(
+        t => t.from === current && t.symbols?.includes(symbol)
       );
-      if (!transition) {
-        return { steps, status: 'rejected' };
-      }
-      currentState = transition.to;
+      if (!tr) return { steps, status: 'rejected', finalStates: [current] };
+      current = tr.to;
       remaining = input.slice(i + 1);
-      steps.push({ currentState, remainingInput: remaining, symbol });
+      steps.push({ currentState: current, remainingInput: remaining, consumedSymbol: symbol });
     }
 
-    const finalState = snapshot.states.find(s => s.id === currentState);
-    const status: SimulationResult['status'] = finalState?.isFinal ? 'accepted' : 'rejected';
-    return { steps, status };
+    const finalState = snapshot.states.find(s => s.id === current && s.isFinal);
+    return {
+      steps,
+      status: finalState ? 'accepted' : 'rejected',
+      finalStates: [current]
+    };
+  },
+  convertFrom: (source) => {
+    // Qualquer DFA ou NFA determinístico básico pode virar DFA mantendo estrutura se não há pares/pilha/fita
+    return {
+      snapshot: {
+        type: 'dfa',
+        meta: {},
+        states: source.states.map(s => ({
+          id: s.id,
+            label: s.label,
+            x: s.x,
+            y: s.y,
+            isInitial: !!s.isInitial,
+            isFinal: !!s.isFinal
+        })),
+        transitions: source.transitions
+          .filter(t => t.symbols)
+          .map(t => ({
+            id: t.id,
+            from: t.from,
+            to: t.to,
+            symbols: t.symbols?.slice() || []
+          }))
+      }
+    };
   }
 };
