@@ -8,12 +8,11 @@ export const TransitionLayer: React.FC<{
   selectedTransition: string | null;
   onTransitionClick: (e: React.MouseEvent, id: string) => void;
   dragging: { id: string | null; x: number; y: number };
-  dragTick: number;
+  dragTick: number; // ainda recebido para forçar o re-render, mas não usado no useMemo
 }> = ({ states, transitions, labelFormatter, selectedTransition, onTransitionClick, dragging, dragTick }) => {
-  // memo para lookup rápido
-  const map = useMemo(() => Object.fromEntries(states.map(s => [s.id, s])), [states, dragTick]);
+  // memo para lookup rápido (não depende de dragTick)
+  const map = useMemo(() => Object.fromEntries(states.map(s => [s.id, s])), [states]);
 
-  // Agrupar transições por direção (from -> to)
   const transitionGroups = useMemo(() => {
     const groups: Record<string, BaseTransition[]> = {};
     transitions.forEach(t => {
@@ -52,26 +51,18 @@ export const TransitionLayer: React.FC<{
   }
 
   function getTransitionLabelPosition(from: BaseState, to: BaseState, isSelfLoop: boolean, offset = 0) {
-    // Self-loop agora empilha para cima (y diminuindo)
     if (isSelfLoop) return { x: from.x - 5, y: from.y - 100 - offset * 20 };
-
     const hasReverse = transitions.some(t => t.from === to.id && t.to === from.id);
     const midX = (from.x + to.x) / 2, midY = (from.y + to.y) / 2;
-
     if (hasReverse) {
-      // Base no lado do arco deste grupo
       const dx = to.x - from.x, dy = to.y - from.y;
       const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
       const perpX = -(dy / dist) * 30, perpY = (dx / dist) * 30;
       const baseX = midX + perpX;
       const baseY = midY + perpY;
-
-      // Abaixo empilha para baixo; acima empilha para cima
       const stackDir = baseY > midY ? 1 : -1;
       return { x: baseX, y: baseY + stackDir * offset * 20 };
     }
-
-    // Sem reversa: empilhar sempre para cima
     return { x: midX, y: midY - offset * 20 };
   }
 
@@ -97,7 +88,6 @@ export const TransitionLayer: React.FC<{
 
         return (
           <g key={key}>
-            {/* Renderiza a seta apenas uma vez para o grupo */}
             <path
               d={path}
               stroke={group.some(t => selectedTransition === t.id) ? '#fbbf24' : '#a78bfa'}
@@ -106,12 +96,9 @@ export const TransitionLayer: React.FC<{
               markerEnd={group.some(t => selectedTransition === t.id) ? 'url(#arrowhead-selected)' : 'url(#arrowhead)'}
               className="transition-none pointer-events-none"
             />
-            
-            {/* Renderiza os labels com offset para evitar sobreposição */}
             {group.map((t, index) => {
               const labelPos = getTransitionLabelPosition(fromRaw, toRaw, isSelf, index);
               const isSel = selectedTransition === t.id;
-              
               return (
                 <text
                   key={t.id}

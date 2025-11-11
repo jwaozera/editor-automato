@@ -1,6 +1,5 @@
 import {
   AutomatonFactory,
-  AutomatonSnapshot,
   SimulationResult,
   SimulationStep
 } from '../base/types';
@@ -19,13 +18,9 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
     },
     normalizeTransition: (t) => {
       if (!t.symbols) t.symbols = [];
-      t.symbols = Array.from(
-        new Set(
-          t.symbols
-            .map((s: string) => s.trim())
-            .filter((s: string) => s.length > 0)
-        )
-      );
+      t.symbols = Array.from(new Set(
+        t.symbols.map((s: string) => s.trim()).filter((s: string) => s.length > 0)
+      ));
       return t;
     },
     formatTransitionLabel: (t) => (t.symbols || []).join(', '),
@@ -63,30 +58,37 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
 
     for (let i = 0; i < input.length; i++) {
       const symbol = input[i];
-      const tr = snapshot.transitions.find(
-        (t) => t.from === current && t.symbols?.includes(symbol)
-      );
+
+      // evitar função dentro do loop
+      let tr: typeof snapshot.transitions[number] | undefined;
+      for (const t of snapshot.transitions) {
+        if (t.from === current && t.symbols?.includes(symbol)) {
+          tr = t;
+          break;
+        }
+      }
+
       if (!tr) {
         if (!snapshot.meta?.recognitionMode) {
-          return {
-            steps,
-            status: 'running',
-            finalStates: [current],
-            outputTrace: outTrace
-          };
+          return { steps, status: 'running', finalStates: [current], outputTrace: outTrace };
         }
-        return {
-          steps,
-          status: 'rejected',
-          finalStates: [current],
-          outputTrace: outTrace
-        };
+        return { steps, status: 'rejected', finalStates: [current], outputTrace: outTrace };
       }
+
       current = tr.to;
       remaining = input.slice(i + 1);
-      const stateObj = snapshot.states.find((s) => s.id === current);
+
+      // evitar função dentro do loop ao buscar o estado
+      let stateObj: typeof snapshot.states[number] | undefined;
+      for (const s of snapshot.states) {
+        if (s.id === current) {
+          stateObj = s;
+          break;
+        }
+      }
       const produced = stateObj?.output || '';
       outTrace += produced;
+
       steps.push({
         currentState: current,
         remainingInput: remaining,
@@ -97,12 +99,7 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
     }
 
     if (!snapshot.meta?.recognitionMode) {
-      return {
-        steps,
-        status: 'running',
-        finalStates: [current],
-        outputTrace: outTrace
-      };
+      return { steps, status: 'running', finalStates: [current], outputTrace: outTrace };
     }
 
     const accepted = snapshot.states.some(

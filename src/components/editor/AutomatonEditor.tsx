@@ -8,8 +8,7 @@ import {
 import {
   AutomatonSnapshot,
   BaseState,
-  BaseTransition,
-  SimulationResult
+  BaseTransition
 } from '../../core/automata/base/types';
 
 import { getAutomatonFactory } from '../../core/automata/registry';
@@ -37,14 +36,14 @@ const AutomatonEditor: React.FC = () => {
   const snapshotRef = useRef(snapshot);
   useEffect(() => { snapshotRef.current = snapshot; }, [snapshot]);
 
-  // Histórico precisa vir antes de callbacks que usam push
-  const { push, history, index } = useHistory(50);
+  // Inclui undo / redo
+  const { push, history, index, undo, redo } = useHistory(50);
 
   // Seleção
   const [selectedState, setSelectedState] = useState<string | null>(null);
   const [selectedTransition, setSelectedTransition] = useState<string | null>(null);
 
-  // Modo
+  // Modo / criação de transição
   const [mode, setMode] = useState<'select' | 'addState' | 'addTransition'>('select');
   const [transitionFrom, setTransitionFrom] = useState<string | null>(null);
   const [transitionTo, setTransitionTo] = useState<string | null>(null);
@@ -54,7 +53,7 @@ const AutomatonEditor: React.FC = () => {
 
   // Simulação
   const [inputString, setInputString] = useState('');
-  const { result, isSimulating, stepsIndex, run, reset, currentStateId } = useSimulation(factory);
+  const { result, isSimulating, stepsIndex, run, reset } = useSimulation(factory);
   const simulationResult = !isSimulating && result ? result.status : null;
 
   // Pan/Zoom
@@ -62,7 +61,7 @@ const AutomatonEditor: React.FC = () => {
     usePanZoom(MIN_SCALE, MAX_SCALE, 1.15);
   const [spaceDown, setSpaceDown] = useState(false);
 
-  // Drag
+  // Drag de estados
   const [isDragging, setIsDragging] = useState(false);
   const draggingRef = useRef<{
     id: string | null; startScreenX: number; startScreenY: number;
@@ -74,20 +73,18 @@ const AutomatonEditor: React.FC = () => {
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const stateElRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // Inicializa histórico
+  // Inicializa histórico com estado vazio inicial
   useEffect(() => {
     push(deepClone(snapshot));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Troca de tipo
+  // Troca de tipo de autômato
   const handleTypeChange = useCallback((newType: string) => {
     const targetFactory = getAutomatonFactory(newType);
     if (targetFactory.convertFrom) {
       const { snapshot: converted, warnings } = targetFactory.convertFrom(snapshotRef.current);
-      if (warnings?.length) {
-        alert(warnings.join('\n'));
-      }
+      if (warnings?.length) alert(warnings.join('\n'));
       setAutomatonType(newType);
       setSnapshot(deepClone(converted));
       push(deepClone(converted));
@@ -99,18 +96,20 @@ const AutomatonEditor: React.FC = () => {
     }
   }, [push]);
 
-  // Shortcuts
+  // Atalhos de teclado
   useEditorShortcuts({
     onUndo: () => {
       if (index > 0) {
         const prev = history[index - 1];
         setSnapshot(deepClone(prev));
+        undo(); // ajusta índice
       }
     },
     onRedo: () => {
       if (index < history.length - 1) {
-        const next = history[index + 1];
-        setSnapshot(deepClone(next));
+        const nextSnap = history[index + 1];
+        setSnapshot(deepClone(nextSnap));
+        redo(history.length); // ajusta índice
       }
     },
     onSave: () => downloadSnapshot(snapshotRef.current),
@@ -134,7 +133,7 @@ const AutomatonEditor: React.FC = () => {
     setSpaceDown
   });
 
-  // RAF para drag suave
+  // Loop de animação para drag suave (atualiza dragTick)
   useEffect(() => {
     if (!isDragging) return;
     let raf = 0;
@@ -173,8 +172,7 @@ const AutomatonEditor: React.FC = () => {
         isInitial: snapshot.states.length === 0,
         isFinal: false
       } as BaseState);
-    const next = { ...snapshot, states: [...snapshot.states, st] };
-    commit(next);
+    commit({ ...snapshot, states: [...snapshot.states, st] });
   }, [snapshot, commit, factory, toLogicalPoint]);
 
   const deleteSelectedState = useCallback(() => {
@@ -235,10 +233,8 @@ const AutomatonEditor: React.FC = () => {
         let panDX = 0, panDY = 0;
         if (ev.clientX - containerRect.left < EDGE_PAN_MARGIN) panDX = EDGE_PAN_SPEED;
         else if (containerRect.right - ev.clientX < EDGE_PAN_MARGIN) panDX = -EDGE_PAN_SPEED;
-
         if (ev.clientY - containerRect.top < EDGE_PAN_MARGIN) panDY = EDGE_PAN_SPEED;
         else if (containerRect.bottom - ev.clientY < EDGE_PAN_MARGIN) panDY = -EDGE_PAN_SPEED;
-
         if (panDX !== 0 || panDY !== 0) {
           setPan(prev => ({ x: prev.x + panDX, y: prev.y + panDY }));
           draggingRef.current.startScreenX += panDX;
@@ -300,8 +296,6 @@ const AutomatonEditor: React.FC = () => {
     }
   }, [mode]);
 
-  const openAddTransitionDialog = () => setShowTransitionDialog(true);
-
   const addTransition = useCallback(() => {
     if (!transitionFrom || !transitionTo) {
       setShowTransitionDialog(false);
@@ -328,8 +322,8 @@ const AutomatonEditor: React.FC = () => {
     } else if (caps.supportsStack) {
       const spec = transitionSymbols.trim();
       const parts = spec.split('->');
-      let left = parts[0]?.trim() || '';
-      let pushStr = parts[1]?.trim() || '';
+      const left = parts[0]?.trim() || '';
+      const pushStr = parts[1]?.trim() || '';
       const [read, pop] = left.split(',').map(s => s?.trim() || '');
       newTransition = {
         id: `t${Date.now()}`,
@@ -454,8 +448,8 @@ const AutomatonEditor: React.FC = () => {
     } else if (caps.supportsStack) {
       const spec = transitionSymbols.trim();
       const parts = spec.split('->');
-      let left = parts[0]?.trim() || '';
-      let pushStr = parts[1]?.trim() || '';
+      const left = parts[0]?.trim() || '';
+      const pushStr = parts[1]?.trim() || '';
       const [read, pop] = left.split(',').map(s => s?.trim() || '');
       updated.pda = {
         read: read || 'ε',
@@ -491,10 +485,8 @@ const AutomatonEditor: React.FC = () => {
     setSelectedTransition(null);
   }, [selectedTransition, transitionSymbols, snapshot, commit, factory]);
 
-  const saveAutomaton = useCallback(() => {
-    downloadSnapshot(snapshotRef.current);
-  }, []);
-
+  // Salvar/Carregar
+  const saveAutomaton = useCallback(() => downloadSnapshot(snapshotRef.current), []);
   const loadAutomaton = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -512,6 +504,7 @@ const AutomatonEditor: React.FC = () => {
     }
   }, [push]);
 
+  // Zoom com roda do mouse
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey) return;
     e.preventDefault();
@@ -529,6 +522,7 @@ const AutomatonEditor: React.FC = () => {
     setScale(newScale);
   }, [scale, pan.x, pan.y, setPan, setScale]);
 
+  // Simular
   const simulate = useCallback(() => {
     const initial = snapshot.states.find(s => s.isInitial);
     if (!initial) {
@@ -538,6 +532,7 @@ const AutomatonEditor: React.FC = () => {
     run(snapshot, inputString);
   }, [snapshot, inputString, run]);
 
+  // Estados ativos na simulação
   const activeStatesSet = (() => {
     if (!result || result.steps.length === 0) return new Set<string>();
     const step = result.steps[Math.min(stepsIndex, result.steps.length - 1)];
@@ -550,11 +545,9 @@ const AutomatonEditor: React.FC = () => {
     ? result.steps[result.steps.length - 1].cumulativeOutput
     : '');
 
-  const lastStep: SimulationResult['steps'][number] | undefined =
-    result?.steps?.[Math.min(stepsIndex, (result?.steps.length || 1) - 1)];
-
   return (
     <div className="w-full h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col">
+      {/* Barra superior */}
       <div className="bg-slate-800/50 backdrop-blur-lg border-b border-purple-500/30 p-4 shadow-lg">
         <div className="flex items-center justify-between mb-4">
           <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-pink-400">
@@ -595,6 +588,7 @@ const AutomatonEditor: React.FC = () => {
               if (index > 0) {
                 const prev = history[index - 1];
                 setSnapshot(deepClone(prev));
+                undo();
               }
             }}
             disabled={index <= 0}
@@ -602,17 +596,18 @@ const AutomatonEditor: React.FC = () => {
             title="Desfazer (Ctrl+Z)"
           ><Undo size={18}/></button>
 
-          <button
-            onClick={() => {
-              if (index < history.length - 1) {
-                const next = history[index + 1];
-                setSnapshot(deepClone(next));
-              }
-            }}
-            disabled={index >= history.length - 1}
-            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2 disabled:opacity-50"
-            title="Refazer (Ctrl+Y)"
-          ><Redo size={18}/></button>
+            <button
+              onClick={() => {
+                if (index < history.length - 1) {
+                  const nextSnap = history[index + 1];
+                  setSnapshot(deepClone(nextSnap));
+                  redo(history.length);
+                }
+              }}
+              disabled={index >= history.length - 1}
+              className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2 disabled:opacity-50"
+              title="Refazer (Ctrl+Y ou Shift+Ctrl+Z)"
+            ><Redo size={18}/></button>
 
           <div className="border-l border-slate-600 mx-2"></div>
 
@@ -632,17 +627,17 @@ const AutomatonEditor: React.FC = () => {
           <button
             onClick={zoomIn}
             className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
-            title="Zoom In"
+            title="Zoom In (Ctrl + +)"
           ><ZoomIn size={18}/></button>
           <button
             onClick={zoomOut}
             className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
-            title="Zoom Out"
+            title="Zoom Out (Ctrl + -)"
           ><ZoomOut size={18}/></button>
           <button
             onClick={resetView}
             className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
-            title="Reset"
+            title="Reset View (Ctrl + 0)"
           ><Crosshair size={18}/> Reset</button>
 
           <div className="flex items-center text-xs text-slate-400 ml-2 select-none">
@@ -651,6 +646,7 @@ const AutomatonEditor: React.FC = () => {
         </div>
       </div>
 
+      {/* Área principal */}
       <div className="flex-1 flex overflow-hidden">
         <div
           ref={canvasRef}
@@ -728,6 +724,7 @@ const AutomatonEditor: React.FC = () => {
           </div>
         </div>
 
+        {/* Painel lateral */}
         <div className="w-96 bg-slate-800/50 backdrop-blur-lg border-l border-purple-500/30 p-4 overflow-y-auto">
           <h2 className="text-xl font-bold text-purple-300 mb-4">
             Propriedades ({factory.config.displayName})
@@ -797,6 +794,7 @@ const AutomatonEditor: React.FC = () => {
             </div>
           )}
 
+          {/* Simulação */}
           <div className="bg-slate-700/50 p-4 rounded-lg mb-4">
             <h3 className="text-lg font-semibold text-purple-300 mb-3 flex items-center gap-2">
               <Play size={18}/> Simulação
@@ -813,7 +811,7 @@ const AutomatonEditor: React.FC = () => {
               <button
                 onClick={simulate}
                 disabled={isSimulating || !inputString}
-                className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               ><Play size={16}/> Simular</button>
               <button
                 onClick={reset}
@@ -828,17 +826,18 @@ const AutomatonEditor: React.FC = () => {
             )}
           </div>
 
+          {/* Passos da execução */}
           {result?.steps?.length ? (
             <div className="bg-slate-700/50 p-4 rounded-lg">
               <h3 className="text-lg font-semibold text-purple-300 mb-3 flex items-center gap-2">
                 <Eye size={18}/> Execução
               </h3>
               <div className="space-y-2 max-h-72 overflow-y-auto">
-                {result.steps.slice(0, Math.min(stepsIndex + 1, result.steps.length)).map((step, index) => (
+                {result.steps.slice(0, Math.min(stepsIndex + 1, result.steps.length)).map((step, idx) => (
                   <div
-                    key={index}
+                    key={idx}
                     className={`p-2 rounded-lg ${
-                      index === Math.min(stepsIndex, result.steps.length - 1)
+                      idx === Math.min(stepsIndex, result.steps.length - 1)
                         ? 'bg-purple-600/30 border border-purple-500'
                         : 'bg-slate-600/30'
                     }`}
@@ -917,13 +916,14 @@ const AutomatonEditor: React.FC = () => {
             </div>
           ) : null}
 
+          {/* Dicas */}
           <div className="mt-6 bg-slate-700/30 p-3 rounded-lg text-sm text-slate-400">
             <p className="mt-3 mb-2"><strong className="text-purple-300">Dicas:</strong></p>
             <ul className="space-y-1 list-disc list-inside">
               <li>Use a roda do mouse para zoom</li>
               <li>Barra de espaço ou botão do meio para pan</li>
               <li>Ctrl + + / - / 0 para zoom in/out/reset</li>
-              <li>Ctrl+Z / Ctrl+Y desfazer/refazer</li>
+              <li>Ctrl+Z / Ctrl+Y (ou Shift+Ctrl+Z) desfazer/refazer</li>
               <li>Delete remove seleção</li>
               <li>Esc cancela ações</li>
               <li>Mealy: a/x, b/y</li>
@@ -936,6 +936,7 @@ const AutomatonEditor: React.FC = () => {
         </div>
       </div>
 
+      {/* Dialog: Nova Transição */}
       {showTransitionDialog && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-slate-800 p-6 rounded-xl shadow-2xl border border-purple-500/30 w-[420px]">
@@ -992,6 +993,7 @@ const AutomatonEditor: React.FC = () => {
         </div>
       )}
 
+      {/* Dialog: Editar Transição */}
       {showEditTransitionDialog && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-slate-800 p-6 rounded-xl shadow-2xl border border-purple-500/30 w-[420px]">

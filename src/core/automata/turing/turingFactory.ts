@@ -1,6 +1,5 @@
 import {
   AutomatonFactory,
-  AutomatonSnapshot,
   SimulationResult,
   SimulationStep
 } from '../base/types';
@@ -49,11 +48,25 @@ export const turingFactory: AutomatonFactory<any, any, TMMeta> = {
 
     for (let stepCount = 0; stepCount < maxSteps; stepCount++) {
       const currentSymbol = tape[head] ?? blank;
-      const tr = snapshot.transitions.find(
-        t => t.from === state && t.tm?.read === currentSymbol
-      );
+
+      // evitar função dentro do loop ao buscar transição
+      let tr: typeof snapshot.transitions[number] | undefined;
+      for (const t of snapshot.transitions) {
+        if (t.from === state && t.tm?.read === currentSymbol) {
+          tr = t;
+          break;
+        }
+      }
+
       if (!tr) {
-        const finalOk = snapshot.states.find(s => s.id === state && s.isFinal);
+        // evitar função dentro do loop ao verificar estado final
+        let finalOk = false;
+        for (const s of snapshot.states) {
+          if (s.id === state && s.isFinal) {
+            finalOk = true;
+            break;
+          }
+        }
         return {
           steps,
           status: finalOk ? 'accepted' : 'rejected',
@@ -73,8 +86,15 @@ export const turingFactory: AutomatonFactory<any, any, TMMeta> = {
         consumedSymbol: currentSymbol
       });
 
-      const finalState = snapshot.states.find(s => s.id === state && s.isFinal);
-      if (finalState) {
+      // evitar função dentro do loop ao verificar estado final
+      let isFinal = false;
+      for (const s of snapshot.states) {
+        if (s.id === state && s.isFinal) {
+          isFinal = true;
+          break;
+        }
+      }
+      if (isFinal) {
         return {
           steps,
           status: 'accepted',

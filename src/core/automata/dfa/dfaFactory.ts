@@ -47,9 +47,14 @@ export const dfaFactory: AutomatonFactory = {
 
     for (let i = 0; i < input.length; i++) {
       const symbol = input[i];
-      const tr = snapshot.transitions.find(
-        t => t.from === current && t.symbols?.includes(symbol)
-      );
+      // Reescrito sem função inline dentro do loop
+      let tr = undefined as typeof snapshot.transitions[number] | undefined;
+      for (const t of snapshot.transitions) {
+        if (t.from === current && t.symbols?.includes(symbol)) {
+          tr = t;
+          break;
+        }
+      }
       if (!tr) return { steps, status: 'rejected', finalStates: [current] };
       current = tr.to;
       remaining = input.slice(i + 1);
@@ -64,18 +69,17 @@ export const dfaFactory: AutomatonFactory = {
     };
   },
   convertFrom: (source) => {
-    // Qualquer DFA ou NFA determinístico básico pode virar DFA mantendo estrutura se não há pares/pilha/fita
     return {
       snapshot: {
         type: 'dfa',
         meta: {},
         states: source.states.map(s => ({
           id: s.id,
-            label: s.label,
-            x: s.x,
-            y: s.y,
-            isInitial: !!s.isInitial,
-            isFinal: !!s.isFinal
+          label: s.label,
+          x: s.x,
+          y: s.y,
+          isInitial: !!s.isInitial,
+          isFinal: !!s.isFinal
         })),
         transitions: source.transitions
           .filter(t => t.symbols)

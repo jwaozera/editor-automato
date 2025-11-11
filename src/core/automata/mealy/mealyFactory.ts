@@ -6,7 +6,7 @@ import {
 } from '../base/types';
 
 interface MealyMeta {
-  recognitionMode: boolean; // habilita estados finais para aceitação
+  recognitionMode: boolean;
 }
 
 interface MealyPair {
@@ -29,9 +29,7 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
         const inp = pair.in.trim();
         if (inp) map.set(inp, (pair.out ?? '').trim());
       }
-      t.pairs = Array.from(map.entries()).map(
-        ([i, o]: [string, string]) => ({ in: i, out: o })
-      );
+      t.pairs = Array.from(map.entries()).map(([i, o]) => ({ in: i, out: o }));
       return t;
     },
     formatTransitionLabel: (t) =>
@@ -68,10 +66,14 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
     });
 
     for (let i = 0; i < input.length; i++) {
-      const symbol: string = input[i];
-      const transition = snapshot.transitions.find(
-        (t) => t.from === current && t.pairs?.some((p: MealyPair) => p.in === symbol)
-      );
+      const symbol = input[i];
+      let transition: typeof snapshot.transitions[number] | undefined;
+      for (const t of snapshot.transitions) {
+        if (t.from === current && t.pairs?.some((p: MealyPair) => p.in === symbol)) {
+          transition = t;
+          break;
+        }
+      }
       if (!transition) {
         const finalStates = [current];
         if (!snapshot.meta?.recognitionMode) {
@@ -93,17 +95,10 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
     }
 
     if (!snapshot.meta?.recognitionMode) {
-      return {
-        steps,
-        status: 'running',
-        finalStates: [current],
-        outputTrace: output
-      };
+      return { steps, status: 'running', finalStates: [current], outputTrace: output };
     }
 
-    const accepted = snapshot.states.some(
-      (s) => s.id === current && s.isFinal
-    );
+    const accepted = snapshot.states.some((s) => s.id === current && s.isFinal);
     return {
       steps,
       status: accepted ? 'accepted' : 'rejected',
@@ -122,9 +117,7 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
           id: t.id,
           from: t.from,
           to: t.to,
-          pairs: (t.symbols || []).map(
-            (sym: string): MealyPair => ({ in: sym, out: '' })
-          )
+          pairs: (t.symbols || []).map((sym: string): MealyPair => ({ in: sym, out: '' }))
         }))
     };
     return {

@@ -1,7 +1,6 @@
-// Somente comentário extra para lembrar do epsilon vazio; sem mudança lógica adicional.
+// Removido import de AutomatonSnapshot se não usado
 import {
   AutomatonFactory,
-  AutomatonSnapshot,
   SimulationResult,
   SimulationStep
 } from '../base/types';
