@@ -1,4 +1,4 @@
-// Tipos base com suporte a múltiplos modelos
+// Tipos base (atualizado com supportsRecognitionMode opcional)
 
 export type StateId = string;
 export type TransitionId = string;
@@ -10,8 +10,7 @@ export interface BaseState {
   y: number;
   isInitial?: boolean;
   isFinal?: boolean;
-  // Moore: saída por estado
-  output?: string;
+  output?: string; // Moore
   [key: string]: any;
 }
 
@@ -19,14 +18,10 @@ export interface BaseTransition {
   id: TransitionId;
   from: StateId;
   to: StateId;
-  // Modelos que usam lista de símbolos (DFA, NFA, Moore)
-  symbols?: string[];
-  // Mealy: pares entrada/saída
-  pairs?: { in: string; out: string }[];
-  // PDA: read/pop/push
-  pda?: { read: string; pop: string; push: string };
-  // Turing: read/write/move
-  tm?: { read: string; write: string; move: 'L' | 'R' | 'S' };
+  symbols?: string[];                           // DFA/NFA/Moore
+  pairs?: { in: string; out: string }[];        // Mealy
+  pda?: { read: string; pop: string; push: string }; // PDA
+  tm?: { read: string; write: string; move: 'L' | 'R' | 'S' }; // Turing
   [key: string]: any;
 }
 
@@ -63,12 +58,13 @@ export interface SimulationResult {
 }
 
 export interface AutomatonCapabilities {
-  supportsOutputPerTransition?: boolean;
-  supportsOutputPerState?: boolean;
-  supportsEpsilon?: boolean;
-  supportsNondeterminism?: boolean;
-  supportsStack?: boolean;
-  supportsTape?: boolean;
+  supportsOutputPerTransition?: boolean; // Mealy
+  supportsOutputPerState?: boolean;      // Moore
+  supportsEpsilon?: boolean;             // NFA/PDA
+  supportsNondeterminism?: boolean;      // NFA/PDA
+  supportsStack?: boolean;               // PDA
+  supportsTape?: boolean;                // Turing
+  supportsRecognitionMode?: boolean;     // Mealy/Moore (extensão híbrida)
 }
 
 export interface AutomatonComponents {

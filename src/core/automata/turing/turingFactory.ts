@@ -82,11 +82,7 @@ export const turingFactory: AutomatonFactory<any, any, TMMeta> = {
         };
       }
     }
-
-    return {
-      steps,
-      status: 'incomplete'
-    };
+    return { steps, status: 'incomplete' };
   },
   convertFrom: (source) => {
     return {

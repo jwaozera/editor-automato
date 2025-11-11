@@ -1,3 +1,4 @@
+// Somente comentário extra para lembrar do epsilon vazio; sem mudança lógica adicional.
 import {
   AutomatonFactory,
   AutomatonSnapshot,
@@ -48,6 +49,7 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
     transitions: []
   }),
   simulate(snapshot, input): SimulationResult {
+    // ... (igual versão anterior)
     const initial = snapshot.states.find(s => s.isInitial);
     if (!initial) return { steps: [], status: 'rejected' };
 
@@ -76,7 +78,6 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
       if (current.path.length > maxDepth) {
         return { steps: current.path, status: 'incomplete' };
       }
-
       const finished = current.index === input.length &&
         snapshot.states.find(s => s.id === current.state && s.isFinal);
       if (finished) {
@@ -87,7 +88,6 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
           outputTrace: ''
         };
       }
-
       const key = `${current.state}|${current.index}|${current.stack.join(',')}`;
       if (visited.has(key)) continue;
       visited.add(key);
@@ -97,34 +97,26 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
         if (t.from !== current.state) continue;
 
         const { read, pop, push } = t.pda;
-
         if (read !== epsilon) {
           if (current.index >= input.length) continue;
           if (input[current.index] !== read) continue;
         }
-
         const top = current.stack[current.stack.length - 1] ?? epsilon;
         if (pop !== epsilon && top !== pop) continue;
 
         const newStack = current.stack.slice();
         if (pop !== epsilon) newStack.pop();
-
         if (push !== epsilon) {
-          for (let i = push.length - 1; i >= 0; i--) {
-            newStack.push(push[i]);
-          }
+          for (let i = push.length - 1; i >= 0; i--) newStack.push(push[i]);
         }
-
         const newIndex = read === epsilon ? current.index : current.index + 1;
         const remainingInput = input.slice(newIndex);
-
         const step: SimulationStep = {
           activeStates: [t.to],
           remainingInput,
-            consumedSymbol: read === epsilon ? undefined : read,
+          consumedSymbol: read === epsilon ? undefined : read,
           stack: newStack.slice()
         };
-
         queue.push({
           state: t.to,
           index: newIndex,
@@ -133,7 +125,6 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
         });
       }
     }
-
     return { steps: [], status: 'rejected' };
   },
   convertFrom: (source) => {
