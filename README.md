@@ -31,7 +31,7 @@ E-mail: [ofo@ic.ufal.br](mailto:ofo@ic.ufal.br)
 
 ## Objetivo Acadêmico
 
-Este projeto foi desenvolvido como parte da disciplina **Teoria da Computação e Linguagens Formais e Autômatos (LFA)**,  
+Este projeto foi desenvolvido como parte da disciplina **Linguagens Formais e Autômatos (LFA)**,  
 oferecida pelo **Instituto de Computação da Universidade Federal de Alagoas (IC/UFAL)**.
 
 O propósito principal é **fornecer uma ferramenta educacional** que permita aos alunos **explorar os conceitos de reconhecimento de linguagens formais, autômatos e máquinas computacionais** de maneira prática e visual.
