@@ -28,6 +28,13 @@ const MAX_SCALE = 3;
 
 const deepClone = <T,>(obj: T): T => JSON.parse(JSON.stringify(obj));
 
+// Helper para obter o símbolo de epsilon a partir do snapshot/factory
+function getEpsilonSymbol(snapshot: any, factory: any) {
+  return (snapshot?.meta?.epsilon)
+    || (factory?.config?.defaultMeta?.epsilon)
+    || 'ε';
+}
+
 const AutomatonEditor: React.FC = () => {
   const [automatonType, setAutomatonType] = useState('dfa');
   const factory = getAutomatonFactory(automatonType);
@@ -303,6 +310,9 @@ const AutomatonEditor: React.FC = () => {
     }
 
     const caps = factory.config.capabilities;
+    const isNFA = factory.config.type === 'nfa';
+    const isPDA = !!caps.supportsStack;
+    const eps = getEpsilonSymbol(snapshot, factory);
     let newTransition: BaseTransition;
 
     if (caps.supportsOutputPerTransition) {
@@ -319,21 +329,21 @@ const AutomatonEditor: React.FC = () => {
         to: transitionTo,
         pairs: rawPairs
       };
-    } else if (caps.supportsStack) {
+    } else if (isPDA) {
+      // PDA: a,$->AA  | permitir '&' como ε
       const spec = transitionSymbols.trim();
       const parts = spec.split('->');
       const left = parts[0]?.trim() || '';
       const pushStr = parts[1]?.trim() || '';
-      const [read, pop] = left.split(',').map(s => s?.trim() || '');
+      const [readRaw, popRaw] = left.split(',').map(s => s?.trim() || '');
+      const read = readRaw ? readRaw.replace(/&/g, eps) : eps;
+      const pop = popRaw ? popRaw.replace(/&/g, eps) : eps;
+      const push = pushStr ? pushStr.replace(/&/g, eps) : eps;
       newTransition = {
         id: `t${Date.now()}`,
         from: transitionFrom,
         to: transitionTo,
-        pda: {
-          read: read || 'ε',
-          pop: pop || 'ε',
-          push: pushStr || 'ε'
-        }
+        pda: { read, pop, push }
       };
     } else if (caps.supportsTape) {
       const spec = transitionSymbols.trim();
@@ -350,9 +360,18 @@ const AutomatonEditor: React.FC = () => {
         }
       };
     } else {
-      const symbols = transitionSymbols.split(',')
-        .map(s => s.trim())
-        .filter(Boolean);
+      // DFA/NFA
+      const raw = transitionSymbols.trim();
+      let symbols: string[];
+      if (isNFA && raw === '') {
+        // vazio = ε
+        symbols = [eps];
+      } else {
+        const tokens = transitionSymbols.split(',').map(s => s.trim());
+        symbols = tokens
+          .map(s => (isNFA ? s.replace(/&/g, eps) : s))
+          .filter(Boolean);
+      }
       newTransition = {
         id: `t${Date.now()}`,
         from: transitionFrom,
@@ -425,15 +444,33 @@ const AutomatonEditor: React.FC = () => {
 
   const updateTransition = useCallback(() => {
     if (!selectedTransition) return;
-    if (!transitionSymbols.trim()) {
-      setShowEditTransitionDialog(false);
-      setTransitionSymbols('');
-      return;
-    }
 
-    const caps = factory.config.capabilities;
     const tr = snapshot.transitions.find(t => t.id === selectedTransition);
     if (!tr) return;
+
+    const caps = factory.config.capabilities;
+    const isNFA = factory.config.type === 'nfa';
+    const isPDA = !!caps?.supportsStack;
+    const eps = getEpsilonSymbol(snapshot, factory);
+
+    // Campo vazio: no NFA vira ε; demais, fecha sem salvar
+    if (!transitionSymbols.trim()) {
+      if (isNFA) {
+        const updated: BaseTransition = { ...tr, symbols: [eps] };
+        const normalized = factory.config.normalizeTransition
+          ? factory.config.normalizeTransition(updated)
+          : updated;
+        const next = {
+          ...snapshot,
+          transitions: snapshot.transitions.map(t => t.id === selectedTransition ? normalized : t)
+        };
+        commit(next);
+      }
+      setShowEditTransitionDialog(false);
+      setTransitionSymbols('');
+      setSelectedTransition(null);
+      return;
+    }
 
     let updated: BaseTransition = { ...tr };
     if (caps.supportsOutputPerTransition) {
@@ -445,17 +482,17 @@ const AutomatonEditor: React.FC = () => {
           return { in: inp, out: outp ?? '' };
         }).filter(p => p.in);
       updated.pairs = rawPairs;
-    } else if (caps.supportsStack) {
+    } else if (isPDA) {
+      // PDA com '&'→ε
       const spec = transitionSymbols.trim();
       const parts = spec.split('->');
       const left = parts[0]?.trim() || '';
       const pushStr = parts[1]?.trim() || '';
-      const [read, pop] = left.split(',').map(s => s?.trim() || '');
-      updated.pda = {
-        read: read || 'ε',
-        pop: pop || 'ε',
-        push: pushStr || 'ε'
-      };
+      const [readRaw, popRaw] = left.split(',').map(s => (s?.trim() || ''));
+      const read = readRaw ? readRaw.replace(/&/g, eps) : eps;
+      const pop = popRaw ? popRaw.replace(/&/g, eps) : eps;
+      const push = pushStr ? pushStr.replace(/&/g, eps) : eps;
+      updated.pda = { read, pop, push };
     } else if (caps.supportsTape) {
       const spec = transitionSymbols.trim();
       const [rw, mv] = spec.split(',').map(s => s.trim());
@@ -466,8 +503,13 @@ const AutomatonEditor: React.FC = () => {
         move: (mv === 'L' || mv === 'R' || mv === 'S') ? mv : 'S'
       };
     } else {
-      updated.symbols = transitionSymbols.split(',')
-        .map(s => s.trim())
+      // DFA/NFA; '&'→ε só no NFA
+      const tokens = transitionSymbols.split(',').map(s => s.trim());
+      updated.symbols = tokens
+        .map(s => {
+          if (!s) return s;
+          return isNFA ? s.replace(/&/g, eps) : s;
+        })
         .filter(Boolean);
     }
 
@@ -772,7 +814,7 @@ const AutomatonEditor: React.FC = () => {
                 <option value="final">Por estado final (padrão)</option>
                 <option value="empty-stack">Por pilha vazia</option>
               </select>
-              <p className="text-xs text-slate-400 mt-2">Aceitação por pilha vazia considera a cadeia aceita se, ao fim do processamento, a pilha estiver vazia (considerando o marcador inicial como vazio quando for o único símbolo).</p>
+              <p className="text-xs text-slate-400 mt-2">Aceitação por pilha vazia considera a cadeia aceita se, ao fim do processamento, a pilha estiver vazia (considerando o marcador inicial [...]</p>
             </div>
           )}
 
@@ -854,8 +896,8 @@ const AutomatonEditor: React.FC = () => {
             <div className="flex gap-2">
               <button
                 onClick={simulate}
-                disabled={isSimulating} // || !inputString
-                className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                disabled={isSimulating || !inputString}
+                className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:[...]"
               ><Play size={16} /> Simular</button>
               <button
                 onClick={reset}
@@ -976,8 +1018,8 @@ const AutomatonEditor: React.FC = () => {
               <li>Esc cancela ações</li>
               <li>Mealy: a/x, b/y</li>
               <li>Moore: saída por estado</li>
-              <li>NFA/PDA: use 'ε'</li>
-              <li>PDA: a,$A→A ou ε,ε→ε</li>
+              <li>NFA: deixe em branco ou use '&' (vira 'ε')</li>
+              <li>PDA: use '&' para 'ε' (ex.: &, &→&)</li>
               <li>Turing: 0/1,R (read/write,move)</li>
             </ul>
           </div>
@@ -996,16 +1038,26 @@ const AutomatonEditor: React.FC = () => {
             <input
               type="text"
               value={transitionSymbols}
-              onChange={(e) => setTransitionSymbols(e.target.value)}
+              onChange={(e) => {
+                const raw = e.target.value;
+                const isNFA = factory.config.type === 'nfa';
+                const isPDA = !!factory.config.capabilities?.supportsStack;
+                if (isNFA || isPDA) {
+                  const eps = getEpsilonSymbol(snapshot, factory);
+                  setTransitionSymbols(raw.replace(/&/g, eps));
+                } else {
+                  setTransitionSymbols(raw);
+                }
+              }}
               placeholder={
                 factory.config.capabilities?.supportsOutputPerTransition
                   ? "Pares entrada/saída ex: a/x, b/y"
                   : factory.config.capabilities?.supportsStack
-                    ? "Formato: a,$->AA ou ε,ε->ε"
+                    ? "Formato: a,$->AA | use & para ε (ex.: &, &->&)"
                     : factory.config.capabilities?.supportsTape
                       ? "Formato: 0/1,R (read/write,move)"
                       : factory.config.capabilities?.supportsEpsilon
-                        ? "Símbolos (inclua ε se quiser)"
+                        ? "Símbolos (vazio = ε, & vira ε). Ex.: a, b, ab"
                         : "Símbolos separados por vírgula"
               }
               className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-purple-500"
@@ -1049,8 +1101,18 @@ const AutomatonEditor: React.FC = () => {
             <input
               type="text"
               value={transitionSymbols}
-              onChange={(e) => setTransitionSymbols(e.target.value)}
-              placeholder="Editar conforme formato"
+              onChange={(e) => {
+                const raw = e.target.value;
+                const isNFA = factory.config.type === 'nfa';
+                const isPDA = !!factory.config.capabilities?.supportsStack;
+                if (isNFA || isPDA) {
+                  const eps = getEpsilonSymbol(snapshot, factory);
+                  setTransitionSymbols(raw.replace(/&/g, eps));
+                } else {
+                  setTransitionSymbols(raw);
+                }
+              }}
+              placeholder="Editar conforme formato (use & para ε onde aplicável)"
               className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-purple-500"
               autoFocus
               onKeyDown={(e) => {
