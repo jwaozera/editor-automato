@@ -545,6 +545,21 @@ const AutomatonEditor: React.FC = () => {
     ? result.steps[result.steps.length - 1].cumulativeOutput
     : '');
 
+  // Helpers: UI handlers para metas (meta)
+  const updateRecognitionMode = useCallback((value: string) => {
+    let parsed: any = value;
+    if (value === 'false') parsed = false;
+    // keep 'consumption' and 'final' as strings
+    const nextMeta = { ...(snapshot.meta || {}), recognitionMode: parsed };
+    commit({ ...snapshot, meta: nextMeta });
+  }, [snapshot, commit]);
+
+  const updatePdaAcceptanceMode = useCallback((value: string) => {
+    const parsed = value === 'empty-stack' ? 'empty-stack' : 'final';
+    const nextMeta = { ...(snapshot.meta || {}), acceptanceMode: parsed };
+    commit({ ...snapshot, meta: nextMeta });
+  }, [snapshot, commit]);
+
   return (
     <div className="w-full h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex flex-col">
       {/* Barra superior */}
@@ -559,26 +574,23 @@ const AutomatonEditor: React.FC = () => {
         <div className="flex flex-wrap gap-2">
           <button
             onClick={() => setMode('select')}
-            className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              mode === 'select' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
+            className={`px-4 py-2 rounded-lg font-medium transition-all ${mode === 'select' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-            }`}
+              }`}
           >Selecionar</button>
 
           <button
             onClick={() => setMode('addState')}
-            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${
-              mode === 'addState' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
+            className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${mode === 'addState' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-            }`}
-          ><Plus size={18}/> Estado</button>
+              }`}
+          ><Plus size={18} /> Estado</button>
 
           <button
             onClick={() => setMode('addTransition')}
-            className={`px-4 py-2 rounded-lg font-medium transition-all ${
-              mode === 'addTransition' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
+            className={`px-4 py-2 rounded-lg font-medium transition-all ${mode === 'addTransition' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
                 : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-            }`}
+              }`}
           >Transição</button>
 
           <div className="border-l border-slate-600 mx-2"></div>
@@ -594,20 +606,20 @@ const AutomatonEditor: React.FC = () => {
             disabled={index <= 0}
             className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2 disabled:opacity-50"
             title="Desfazer (Ctrl+Z)"
-          ><Undo size={18}/></button>
+          ><Undo size={18} /></button>
 
-            <button
-              onClick={() => {
-                if (index < history.length - 1) {
-                  const nextSnap = history[index + 1];
-                  setSnapshot(deepClone(nextSnap));
-                  redo(history.length);
-                }
-              }}
-              disabled={index >= history.length - 1}
-              className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2 disabled:opacity-50"
-              title="Refazer (Ctrl+Y ou Shift+Ctrl+Z)"
-            ><Redo size={18}/></button>
+          <button
+            onClick={() => {
+              if (index < history.length - 1) {
+                const nextSnap = history[index + 1];
+                setSnapshot(deepClone(nextSnap));
+                redo(history.length);
+              }
+            }}
+            disabled={index >= history.length - 1}
+            className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2 disabled:opacity-50"
+            title="Refazer (Ctrl+Y ou Shift+Ctrl+Z)"
+          ><Redo size={18} /></button>
 
           <div className="border-l border-slate-600 mx-2"></div>
 
@@ -615,11 +627,11 @@ const AutomatonEditor: React.FC = () => {
             onClick={saveAutomaton}
             className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
             title="Salvar (Ctrl+S)"
-          ><Save size={18}/> Salvar</button>
+          ><Save size={18} /> Salvar</button>
 
           <label className="px-4 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2 cursor-pointer">
-            <Upload size={18}/> Carregar
-            <input type="file" accept=".json" onChange={loadAutomaton} className="hidden"/>
+            <Upload size={18} /> Carregar
+            <input type="file" accept=".json" onChange={loadAutomaton} className="hidden" />
           </label>
 
           <div className="border-l border-slate-600 mx-2"></div>
@@ -638,7 +650,7 @@ const AutomatonEditor: React.FC = () => {
             onClick={resetView}
             className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
             title="Reset View (Ctrl + 0)"
-          ><Crosshair size={18}/> Reset</button>
+          ><Crosshair size={18} /> Reset</button>
 
           <div className="flex items-center text-xs text-slate-400 ml-2 select-none">
             Zoom: {(scale * 100).toFixed(0)}%
@@ -730,6 +742,40 @@ const AutomatonEditor: React.FC = () => {
             Propriedades ({factory.config.displayName})
           </h2>
 
+          {/* Configurações específicas do tipo de autômato */}
+          {/* Mealy/Moore: recognitionMode select */}
+          {factory.config.capabilities?.supportsRecognitionMode && (
+            <div className="mb-4 bg-slate-700/50 p-3 rounded-lg">
+              <p className="text-sm text-slate-300 font-medium mb-2">Modo de Reconhecimento / Transdução</p>
+              <select
+                value={String(snapshot.meta?.recognitionMode ?? 'false')}
+                onChange={(e) => updateRecognitionMode(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-600 text-white rounded"
+              >
+                <option value="false">Transdutor (não decide aceitação)</option>
+                <option value="consumption">Aceitar por consumo total </option>
+                <option value="final">Aceitar por estado final</option>
+              </select>
+              <p className="text-xs text-slate-400 mt-2">Transdutores (p.ex. Mealy/Moore) normalmente produzem saída. Escolha um modo para que a máquina também decida aceitar/rejeitar.</p>
+            </div>
+          )}
+
+          {/* PDA: acceptance mode (final or empty-stack) */}
+          {factory.config.capabilities?.supportsStack && (
+            <div className="mb-4 bg-slate-700/50 p-3 rounded-lg">
+              <p className="text-sm text-slate-300 font-medium mb-2">Modo de Aceitação (PDA)</p>
+              <select
+                value={String(snapshot.meta?.acceptanceMode ?? 'final')}
+                onChange={(e) => updatePdaAcceptanceMode(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-600 text-white rounded"
+              >
+                <option value="final">Por estado final (padrão)</option>
+                <option value="empty-stack">Por pilha vazia</option>
+              </select>
+              <p className="text-xs text-slate-400 mt-2">Aceitação por pilha vazia considera a cadeia aceita se, ao fim do processamento, a pilha estiver vazia (considerando o marcador inicial como vazio quando for o único símbolo).</p>
+            </div>
+          )}
+
           {selectedState && (
             <div className="space-y-3 mb-6">
               <div className="bg-slate-700/50 p-3 rounded-lg">
@@ -737,22 +783,20 @@ const AutomatonEditor: React.FC = () => {
                 <div className="flex gap-2 mb-2">
                   <button
                     onClick={toggleInitial}
-                    className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${
-                      snapshot.states.find(s => s.id === selectedState)?.isInitial
+                    className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${snapshot.states.find(s => s.id === selectedState)?.isInitial
                         ? 'bg-blue-600 text-white'
                         : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
-                    }`}
+                      }`}
                   >Inicial</button>
                   <button
                     onClick={toggleFinal}
-                    className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${
-                      snapshot.states.find(s => s.id === selectedState)?.isFinal
+                    className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${snapshot.states.find(s => s.id === selectedState)?.isFinal
                         ? 'bg-yellow-600 text-white'
                         : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
-                    }`}
+                      }`}
                   >Final</button>
                 </div>
-                {factory.config.capabilities.supportsOutputPerState && (
+                {factory.config.capabilities?.supportsOutputPerState && (
                   <div className="mb-2">
                     <label className="block text-xs text-slate-400 mb-1">Saída (Moore)</label>
                     <input
@@ -771,7 +815,7 @@ const AutomatonEditor: React.FC = () => {
                 <button
                   onClick={deleteSelectedState}
                   className="w-full px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all flex items-center justify-center gap-2"
-                ><Trash2 size={16}/> Deletar Estado</button>
+                ><Trash2 size={16} /> Deletar Estado</button>
               </div>
             </div>
           )}
@@ -784,11 +828,11 @@ const AutomatonEditor: React.FC = () => {
                   <button
                     onClick={editTransition}
                     className="flex-1 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-all flex items-center justify-center gap-2"
-                  ><Edit2 size={16}/> Editar</button>
+                  ><Edit2 size={16} /> Editar</button>
                   <button
                     onClick={deleteSelectedTransition}
                     className="flex-1 px-3 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-all flex items-center justify-center gap-2"
-                  ><Trash2 size={16}/> Deletar</button>
+                  ><Trash2 size={16} /> Deletar</button>
                 </div>
               </div>
             </div>
@@ -797,7 +841,7 @@ const AutomatonEditor: React.FC = () => {
           {/* Simulação */}
           <div className="bg-slate-700/50 p-4 rounded-lg mb-4">
             <h3 className="text-lg font-semibold text-purple-300 mb-3 flex items-center gap-2">
-              <Play size={18}/> Simulação
+              <Play size={18} /> Simulação
             </h3>
             <input
               type="text"
@@ -812,35 +856,34 @@ const AutomatonEditor: React.FC = () => {
                 onClick={simulate}
                 disabled={isSimulating || !inputString}
                 className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              ><Play size={16}/> Simular</button>
+              ><Play size={16} /> Simular</button>
               <button
                 onClick={reset}
                 className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all"
-              ><RotateCcw size={16}/></button>
+              ><RotateCcw size={16} /></button>
             </div>
-            {(factory.config.capabilities.supportsOutputPerTransition ||
-              factory.config.capabilities.supportsOutputPerState) && (
-              <div className="mt-3 text-xs text-slate-300">
-                Output acumulado: <span className="text-purple-300 font-mono">{outputTrace || 'ε'}</span>
-              </div>
-            )}
+            {(factory.config.capabilities?.supportsOutputPerTransition ||
+              factory.config.capabilities?.supportsOutputPerState) && (
+                <div className="mt-3 text-xs text-slate-300">
+                  Output acumulado: <span className="text-purple-300 font-mono">{outputTrace || 'ε'}</span>
+                </div>
+              )}
           </div>
 
           {/* Passos da execução */}
           {result?.steps?.length ? (
             <div className="bg-slate-700/50 p-4 rounded-lg">
               <h3 className="text-lg font-semibold text-purple-300 mb-3 flex items-center gap-2">
-                <Eye size={18}/> Execução
+                <Eye size={18} /> Execução
               </h3>
               <div className="space-y-2 max-h-72 overflow-y-auto">
                 {result.steps.slice(0, Math.min(stepsIndex + 1, result.steps.length)).map((step, idx) => (
                   <div
                     key={idx}
-                    className={`p-2 rounded-lg ${
-                      idx === Math.min(stepsIndex, result.steps.length - 1)
+                    className={`p-2 rounded-lg ${idx === Math.min(stepsIndex, result.steps.length - 1)
                         ? 'bg-purple-600/30 border border-purple-500'
                         : 'bg-slate-600/30'
-                    }`}
+                      }`}
                   >
                     {step.currentState && (
                       <div className="text-sm text-slate-300">
@@ -884,30 +927,35 @@ const AutomatonEditor: React.FC = () => {
                   </div>
                 ))}
               </div>
-
               {!isSimulating && simulationResult && (
                 <div
-                  className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${
-                    simulationResult === 'accepted'
+                  className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${simulationResult === 'accepted'
                       ? 'bg-green-600/30 border border-green-500'
                       : simulationResult === 'rejected'
-                      ? 'bg-red-600/30 border border-red-500'
-                      : 'bg-yellow-600/30 border border-yellow-500'
-                  }`}
+                        ? 'bg-red-600/30 border border-red-500'
+                        : simulationResult === 'transduced'
+                          ? 'bg-blue-600/30 border border-blue-500'
+                          : 'bg-yellow-600/30 border border-yellow-500'
+                    }`}
                 >
                   {simulationResult === 'accepted' ? (
                     <>
-                      <CheckCircle2 className="text-green-400"/>
+                      <CheckCircle2 className="text-green-400" />
                       <span className="text-green-300 font-semibold">Cadeia Aceita!</span>
                     </>
                   ) : simulationResult === 'rejected' ? (
                     <>
-                      <XCircle className="text-red-400"/>
+                      <XCircle className="text-red-400" />
                       <span className="text-red-300 font-semibold">Cadeia Rejeitada!</span>
+                    </>
+                  ) : simulationResult === 'transduced' ? (
+                    <>
+                      <Eye className="text-blue-400" />
+                      <span className="text-blue-300 font-semibold">Transduziu (sem veredito)</span>
                     </>
                   ) : (
                     <>
-                      <Eye className="text-yellow-400"/>
+                      <Eye className="text-yellow-400" />
                       <span className="text-yellow-300 font-semibold">Incompleta / Limite</span>
                     </>
                   )}
@@ -950,15 +998,15 @@ const AutomatonEditor: React.FC = () => {
               value={transitionSymbols}
               onChange={(e) => setTransitionSymbols(e.target.value)}
               placeholder={
-                factory.config.capabilities.supportsOutputPerTransition
+                factory.config.capabilities?.supportsOutputPerTransition
                   ? "Pares entrada/saída ex: a/x, b/y"
-                  : factory.config.capabilities.supportsStack
-                  ? "Formato: a,$->AA ou ε,ε->ε"
-                  : factory.config.capabilities.supportsTape
-                  ? "Formato: 0/1,R (read/write,move)"
-                  : factory.config.capabilities.supportsEpsilon
-                  ? "Símbolos (inclua ε se quiser)"
-                  : "Símbolos separados por vírgula"
+                  : factory.config.capabilities?.supportsStack
+                    ? "Formato: a,$->AA ou ε,ε->ε"
+                    : factory.config.capabilities?.supportsTape
+                      ? "Formato: 0/1,R (read/write,move)"
+                      : factory.config.capabilities?.supportsEpsilon
+                        ? "Símbolos (inclua ε se quiser)"
+                        : "Símbolos separados por vírgula"
               }
               className="w-full px-4 py-2 bg-slate-700 text-white rounded-lg mb-4 focus:outline-none focus:ring-2 focus:ring-purple-500"
               autoFocus

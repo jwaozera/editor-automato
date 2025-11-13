@@ -48,7 +48,7 @@ export interface SimulationStep {
   headPosition?: number;
 }
 
-export type SimulationStatus = 'accepted' | 'rejected' | 'running' | 'incomplete';
+export type SimulationStatus = 'accepted' | 'rejected' | 'running' | 'incomplete' | 'transduced';
 
 export interface SimulationResult {
   steps: SimulationStep[];

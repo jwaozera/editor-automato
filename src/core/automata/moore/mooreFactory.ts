@@ -5,7 +5,9 @@ import {
 } from '../base/types';
 
 interface MooreMeta {
-  recognitionMode: boolean;
+  // pode ser:
+  // false (transducer), true (equivalente a "final"), "final", ou "consumption"
+  recognitionMode?: boolean | 'final' | 'consumption';
 }
 
 export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
@@ -56,6 +58,8 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
       cumulativeOutput: outTrace
     });
 
+    const rm = snapshot.meta?.recognitionMode;
+
     while (position < input.length) {
       let matchedTransition = null;
       let matchedSymbol = '';
@@ -76,8 +80,8 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
       }
 
       if (!matchedTransition) {
-        if (!snapshot.meta?.recognitionMode) {
-          return { steps, status: 'running', finalStates: [current], outputTrace: outTrace };
+        if (!rm) {
+          return { steps, status: 'transduced', finalStates: [current], outputTrace: outTrace };
         }
         return { steps, status: 'rejected', finalStates: [current], outputTrace: outTrace };
       }
@@ -104,8 +108,12 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
       });
     }
 
-    if (!snapshot.meta?.recognitionMode) {
-      return { steps, status: 'running', finalStates: [current], outputTrace: outTrace };
+    // Consumiu toda a entrada
+    if (!rm) {
+      return { steps, status: 'transduced', finalStates: [current], outputTrace: outTrace };
+    }
+    if (rm === 'consumption') {
+      return { steps, status: 'accepted', finalStates: [current], outputTrace: outTrace };
     }
 
     const accepted = snapshot.states.some(

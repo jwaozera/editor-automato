@@ -6,7 +6,9 @@ import {
 } from '../base/types';
 
 interface MealyMeta {
-  recognitionMode: boolean;
+  // pode ser:
+  // false (transducer), true (equivalente a "final"), "final", ou "consumption"
+  recognitionMode?: boolean | 'final' | 'consumption';
 }
 
 interface MealyPair {
@@ -65,6 +67,12 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
       cumulativeOutput: output
     });
 
+    // interpretando modos possíveis
+    const rm = snapshot.meta?.recognitionMode;
+    // rm === false|undefined -> transducer mode
+    // rm === 'consumption' -> aceitar se consumir tudo
+    // rm === true or 'final' -> aceitar por estado final (padrão se true)
+
     while (position < input.length) {
       let matchedTransition = null;
       let matchedPair: MealyPair | null = null;
@@ -86,9 +94,12 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
       
       if (!matchedTransition || !matchedPair) {
         const finalStates = [current];
-        if (!snapshot.meta?.recognitionMode) {
-          return { steps, status: 'running', finalStates, outputTrace: output };
+        // comportamento por modo:
+        if (!rm) {
+          // transducer: não é erro crítico, devolve saída parcial com status transduced
+          return { steps, status: 'transduced', finalStates, outputTrace: output };
         }
+        // modos de reconhecimento: consumo incompleto => rejeita
         return { steps, status: 'rejected', finalStates, outputTrace: output };
       }
       
@@ -105,10 +116,15 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
       });
     }
 
-    if (!snapshot.meta?.recognitionMode) {
-      return { steps, status: 'running', finalStates: [current], outputTrace: output };
+    // consumiu toda a entrada; decidir veredito conforme modo
+    if (!rm) {
+      return { steps, status: 'transduced', finalStates: [current], outputTrace: output };
     }
-
+    if (rm === 'consumption') {
+      // aceitou por consumo completo
+      return { steps, status: 'accepted', finalStates: [current], outputTrace: output };
+    }
+    // rm === true (ou 'final') -> aceitar só se estado final
     const accepted = snapshot.states.some((s) => s.id === current && s.isFinal);
     return {
       steps,

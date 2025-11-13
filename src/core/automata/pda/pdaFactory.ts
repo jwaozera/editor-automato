@@ -1,4 +1,3 @@
-// Removido import de AutomatonSnapshot se não usado
 import {
   AutomatonFactory,
   SimulationResult,
@@ -11,6 +10,8 @@ interface PDAMeta {
   initialStackSymbol: string;
   epsilon: string;
   maxDepth: number;
+  // acceptanceMode: 'final' | 'empty-stack'
+  acceptanceMode?: 'final' | 'empty-stack';
 }
 
 export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
@@ -34,7 +35,8 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
     defaultMeta: {
       initialStackSymbol: '$',
       epsilon: EPS,
-      maxDepth: 500
+      maxDepth: 500,
+      acceptanceMode: 'final'
     }
   },
   createEmpty: () => ({
@@ -42,13 +44,13 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
     meta: {
       initialStackSymbol: '$',
       epsilon: EPS,
-      maxDepth: 500
+      maxDepth: 500,
+      acceptanceMode: 'final'
     },
     states: [],
     transitions: []
   }),
   simulate(snapshot, input): SimulationResult {
-    // ... (igual versão anterior)
     const initial = snapshot.states.find(s => s.isInitial);
     if (!initial) return { steps: [], status: 'rejected' };
 
@@ -71,22 +73,46 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
     const visited = new Set<string>();
     const epsilon = snapshot.meta?.epsilon || EPS;
     const maxDepth = snapshot.meta?.maxDepth || 500;
+    const acceptanceMode = snapshot.meta?.acceptanceMode || 'final';
+
+    let lastPath: SimulationStep[] | null = null; // guardamos último caminho explorado
 
     while (queue.length) {
       const current = queue.shift()!;
+      // guardamos para retornar caso nada aceite
+      lastPath = current.path;
+
       if (current.path.length > maxDepth) {
         return { steps: current.path, status: 'incomplete' };
       }
-      const finished = current.index === input.length &&
-        snapshot.states.find(s => s.id === current.state && s.isFinal);
-      if (finished) {
-        return {
-          steps: current.path,
-          status: 'accepted',
-          finalStates: [current.state],
-          outputTrace: ''
-        };
+
+      // finished: decisão depende do modo de aceitação
+      const consumedAll = current.index === input.length;
+      if (consumedAll) {
+        if (acceptanceMode === 'final') {
+          const finished = snapshot.states.find(s => s.id === current.state && s.isFinal);
+          if (finished) {
+            return {
+              steps: current.path,
+              status: 'accepted',
+              finalStates: [current.state],
+              outputTrace: ''
+            };
+          }
+        } else if (acceptanceMode === 'empty-stack') {
+          const bottom = snapshot.meta?.initialStackSymbol || '$';
+          const isEmptyStack = current.stack.length === 0 || (current.stack.length === 1 && current.stack[0] === bottom);
+          if (isEmptyStack) {
+            return {
+              steps: current.path,
+              status: 'accepted',
+              finalStates: [current.state],
+              outputTrace: ''
+            };
+          }
+        }
       }
+
       const key = `${current.state}|${current.index}|${current.stack.join(',')}`;
       if (visited.has(key)) continue;
       visited.add(key);
@@ -124,13 +150,19 @@ export const pdaFactory: AutomatonFactory<any, any, PDAMeta> = {
         });
       }
     }
-    return { steps: [], status: 'rejected' };
+
+    // Se esgotou a fila sem aceitar, devolvemos o último caminho explorado (se houver)
+    return {
+      steps: lastPath || [],
+      status: 'rejected',
+      finalStates: lastPath && lastPath.length ? [lastPath[lastPath.length - 1].activeStates?.[0] || initial.id] : undefined
+    };
   },
   convertFrom: (source) => {
     return {
       snapshot: {
         type: 'pda',
-        meta: { initialStackSymbol: '$', epsilon: EPS, maxDepth: 500 },
+        meta: { initialStackSymbol: '$', epsilon: EPS, maxDepth: 500, acceptanceMode: 'final' },
         states: source.states.map(s => ({ ...s })),
         transitions: source.transitions
           .filter(t => t.symbols)
