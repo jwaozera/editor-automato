@@ -42,23 +42,41 @@ export const dfaFactory: AutomatonFactory = {
 
     const steps = [];
     let current = initial.id;
-    let remaining = input;
-    steps.push({ currentState: current, remainingInput: remaining });
+    let position = 0;
+    
+    steps.push({ currentState: current, remainingInput: input });
 
-    for (let i = 0; i < input.length; i++) {
-      const symbol = input[i];
-      // Reescrito sem função inline dentro do loop
-      let tr = undefined as typeof snapshot.transitions[number] | undefined;
-      for (const t of snapshot.transitions) {
-        if (t.from === current && t.symbols?.includes(symbol)) {
-          tr = t;
-          break;
+    while (position < input.length) {
+      let matchedTransition = null;
+      let matchedSymbol = '';
+      
+      // Busca a transição com o maior símbolo que casa
+      for (const tr of snapshot.transitions) {
+        if (tr.from !== current) continue;
+        if (!tr.symbols) continue;
+        
+        for (const symbol of tr.symbols) {
+          if (input.substring(position, position + symbol.length) === symbol) {
+            if (symbol.length > matchedSymbol.length) {
+              matchedTransition = tr;
+              matchedSymbol = symbol;
+            }
+          }
         }
       }
-      if (!tr) return { steps, status: 'rejected', finalStates: [current] };
-      current = tr.to;
-      remaining = input.slice(i + 1);
-      steps.push({ currentState: current, remainingInput: remaining, consumedSymbol: symbol });
+      
+      if (!matchedTransition) {
+        return { steps, status: 'rejected', finalStates: [current] };
+      }
+      
+      position += matchedSymbol.length;
+      current = matchedTransition.to;
+      
+      steps.push({ 
+        currentState: current, 
+        remainingInput: input.slice(position),
+        consumedSymbol: matchedSymbol 
+      });
     }
 
     const finalState = snapshot.states.find(s => s.id === current && s.isFinal);

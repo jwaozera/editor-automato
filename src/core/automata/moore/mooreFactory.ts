@@ -46,39 +46,45 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
     if (!initial) return { steps: [], status: 'rejected' };
 
     let current = initial.id;
-    let remaining = input;
+    let position = 0;
     let outTrace = initial.output || '';
 
     const steps: SimulationStep[] = [];
     steps.push({
       currentState: current,
-      remainingInput: remaining,
+      remainingInput: input,
       cumulativeOutput: outTrace
     });
 
-    for (let i = 0; i < input.length; i++) {
-      const symbol = input[i];
-
-      // evitar função dentro do loop
-      let tr: typeof snapshot.transitions[number] | undefined;
-      for (const t of snapshot.transitions) {
-        if (t.from === current && t.symbols?.includes(symbol)) {
-          tr = t;
-          break;
+    while (position < input.length) {
+      let matchedTransition = null;
+      let matchedSymbol = '';
+      
+      // Busca a transição com o maior símbolo que casa
+      for (const tr of snapshot.transitions) {
+        if (tr.from !== current) continue;
+        if (!tr.symbols) continue;
+        
+        for (const symbol of tr.symbols) {
+          if (input.substring(position, position + symbol.length) === symbol) {
+            if (symbol.length > matchedSymbol.length) {
+              matchedTransition = tr;
+              matchedSymbol = symbol;
+            }
+          }
         }
       }
 
-      if (!tr) {
+      if (!matchedTransition) {
         if (!snapshot.meta?.recognitionMode) {
           return { steps, status: 'running', finalStates: [current], outputTrace: outTrace };
         }
         return { steps, status: 'rejected', finalStates: [current], outputTrace: outTrace };
       }
 
-      current = tr.to;
-      remaining = input.slice(i + 1);
+      current = matchedTransition.to;
+      position += matchedSymbol.length;
 
-      // evitar função dentro do loop ao buscar o estado
       let stateObj: typeof snapshot.states[number] | undefined;
       for (const s of snapshot.states) {
         if (s.id === current) {
@@ -91,8 +97,8 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
 
       steps.push({
         currentState: current,
-        remainingInput: remaining,
-        consumedSymbol: symbol,
+        remainingInput: input.slice(position),
+        consumedSymbol: matchedSymbol,
         producedOutput: produced,
         cumulativeOutput: outTrace
       });

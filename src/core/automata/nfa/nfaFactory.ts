@@ -61,21 +61,57 @@ export const nfaFactory: AutomatonFactory = {
       remainingInput: input
     }];
 
-    for (let i = 0; i < input.length; i++) {
-      const symbol = input[i];
+    let position = 0;
+
+    while (position < input.length) {
       const next = new Set<string>();
+      let consumedSymbol = '';
+      
+      // Primeiro, descobre qual o maior símbolo possível
+      let maxSymbolLength = 0;
+      
       for (const t of snapshot.transitions) {
         if (!t.symbols) continue;
-        if (currentSet.has(t.from) && t.symbols.includes(symbol)) {
-          next.add(t.to);
+        if (!currentSet.has(t.from)) continue;
+        
+        for (const symbol of t.symbols) {
+          if (symbol === EPSILON) continue;
+          if (input.substring(position, position + symbol.length) === symbol) {
+            if (symbol.length > maxSymbolLength) {
+              maxSymbolLength = symbol.length;
+            }
+          }
         }
       }
+      
+      if (maxSymbolLength === 0) {
+        return { steps, status: 'rejected', finalStates: Array.from(currentSet) };
+      }
+      
+      // Agora consome todos os caminhos com símbolos desse tamanho
+      for (const t of snapshot.transitions) {
+        if (!t.symbols) continue;
+        if (!currentSet.has(t.from)) continue;
+        
+        for (const symbol of t.symbols) {
+          if (symbol === EPSILON) continue;
+          if (input.substring(position, position + symbol.length) === symbol) {
+            if (symbol.length === maxSymbolLength) {
+              next.add(t.to);
+              consumedSymbol = symbol;
+            }
+          }
+        }
+      }
+      
       const closed = epsilonClosure(snapshot, Array.from(next));
       currentSet = closed;
+      position += maxSymbolLength;
+      
       steps.push({
         activeStates: Array.from(currentSet),
-        remainingInput: input.slice(i + 1),
-        consumedSymbol: symbol
+        remainingInput: input.slice(position),
+        consumedSymbol
       });
     }
 

@@ -56,40 +56,51 @@ export const mealyFactory: AutomatonFactory<any, any, MealyMeta> = {
 
     const steps: SimulationStep[] = [];
     let current = initial.id;
-    let remaining = input;
+    let position = 0;
     let output = '';
 
     steps.push({
       currentState: current,
-      remainingInput: remaining,
+      remainingInput: input,
       cumulativeOutput: output
     });
 
-    for (let i = 0; i < input.length; i++) {
-      const symbol = input[i];
-      let transition: typeof snapshot.transitions[number] | undefined;
-      for (const t of snapshot.transitions) {
-        if (t.from === current && t.pairs?.some((p: MealyPair) => p.in === symbol)) {
-          transition = t;
-          break;
+    while (position < input.length) {
+      let matchedTransition = null;
+      let matchedPair: MealyPair | null = null;
+      
+      // Busca a transição com o maior símbolo que casa
+      for (const tr of snapshot.transitions) {
+        if (tr.from !== current) continue;
+        if (!tr.pairs) continue;
+        
+        for (const pair of tr.pairs as MealyPair[]) {
+          if (input.substring(position, position + pair.in.length) === pair.in) {
+            if (!matchedPair || pair.in.length > matchedPair.in.length) {
+              matchedTransition = tr;
+              matchedPair = pair;
+            }
+          }
         }
       }
-      if (!transition) {
+      
+      if (!matchedTransition || !matchedPair) {
         const finalStates = [current];
         if (!snapshot.meta?.recognitionMode) {
           return { steps, status: 'running', finalStates, outputTrace: output };
         }
         return { steps, status: 'rejected', finalStates, outputTrace: output };
       }
-      const pair = transition.pairs!.find((p: MealyPair) => p.in === symbol)!;
-      output += pair.out;
-      current = transition.to;
-      remaining = input.slice(i + 1);
+      
+      output += matchedPair.out;
+      current = matchedTransition.to;
+      position += matchedPair.in.length;
+      
       steps.push({
         currentState: current,
-        remainingInput: remaining,
-        consumedSymbol: symbol,
-        producedOutput: pair.out,
+        remainingInput: input.slice(position),
+        consumedSymbol: matchedPair.in,
+        producedOutput: matchedPair.out,
         cumulativeOutput: output
       });
     }
