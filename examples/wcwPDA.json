@@ -1,0 +1,97 @@
+{
+  "type": "pda",
+  "meta": {
+    "initialStackSymbol": "$",
+    "epsilon": "ε",
+    "maxDepth": 500,
+    "acceptanceMode": "final"
+  },
+  "states": [
+    {
+      "id": "q0",
+      "label": "q0",
+      "x": 277,
+      "y": 251,
+      "isInitial": true,
+      "isFinal": false
+    },
+    {
+      "id": "q1",
+      "label": "q1",
+      "x": 641.4664830119375,
+      "y": 241.57208448117538,
+      "isInitial": false,
+      "isFinal": false
+    },
+    {
+      "id": "q2",
+      "label": "q2",
+      "x": 1002.5720844811755,
+      "y": 245.4710743801653,
+      "isInitial": false,
+      "isFinal": true
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t1763019448700",
+      "from": "q0",
+      "to": "q0",
+      "pda": {
+        "read": "b",
+        "pop": "ε",
+        "push": "b"
+      }
+    },
+    {
+      "id": "t1763019451068",
+      "from": "q0",
+      "to": "q0",
+      "pda": {
+        "read": "a",
+        "pop": "ε",
+        "push": "a"
+      }
+    },
+    {
+      "id": "t1763019464416",
+      "from": "q0",
+      "to": "q1",
+      "pda": {
+        "read": "c",
+        "pop": "ε",
+        "push": "ε"
+      }
+    },
+    {
+      "id": "t1763019472575",
+      "from": "q1",
+      "to": "q1",
+      "pda": {
+        "read": "b",
+        "pop": "b",
+        "push": "ε"
+      }
+    },
+    {
+      "id": "t1763019495257",
+      "from": "q1",
+      "to": "q1",
+      "pda": {
+        "read": "a",
+        "pop": "a",
+        "push": "ε"
+      }
+    },
+    {
+      "id": "t1763019514000",
+      "from": "q1",
+      "to": "q2",
+      "pda": {
+        "read": "ε",
+        "pop": "$",
+        "push": "$"
+      }
+    }
+  ]
+}

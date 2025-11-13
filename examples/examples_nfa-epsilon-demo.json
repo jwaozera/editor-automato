@@ -1,0 +1,24 @@
+{
+  "type": "nfa",
+  "meta": { "epsilon": "ε" },
+  "states": [
+    { "id": "q0", "label": "q0", "x": 100, "y": 160, "isInitial": true, "isFinal": false },
+    { "id": "qE", "label": "qE", "x": 320, "y": 40, "isInitial": false, "isFinal": true },
+    { "id": "qApre", "label": "qApre", "x": 320, "y": 160, "isInitial": false, "isFinal": false },
+    { "id": "qA", "label": "qA", "x": 540, "y": 160, "isInitial": false, "isFinal": true },
+    { "id": "q1", "label": "q1", "x": 320, "y": 280, "isInitial": false, "isFinal": false },
+    { "id": "qTmp", "label": "qTmp", "x": 540, "y": 280, "isInitial": false, "isFinal": false },
+    { "id": "q2", "label": "q2", "x": 760, "y": 280, "isInitial": false, "isFinal": true }
+  ],
+  "transitions": [
+    { "id": "tε-E", "from": "q0", "to": "qE", "symbols": ["ε"] },
+    { "id": "tε-A", "from": "q0", "to": "qApre", "symbols": ["ε"] },
+    { "id": "tε-AB", "from": "q0", "to": "q1", "symbols": ["ε"] },
+
+    { "id": "t-a", "from": "qApre", "to": "qA", "symbols": ["a"] },
+
+    { "id": "t-loop", "from": "q1", "to": "q1", "symbols": ["a", "b"] },
+    { "id": "t-a-to-tmp", "from": "q1", "to": "qTmp", "symbols": ["a"] },
+    { "id": "t-b-to-final", "from": "qTmp", "to": "q2", "symbols": ["b"] }
+  ]
+}

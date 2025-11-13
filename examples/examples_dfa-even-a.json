@@ -1,0 +1,14 @@
+{
+  "type": "dfa",
+  "meta": {},
+  "states": [
+    { "id": "q0", "label": "q0", "x": 100, "y": 100, "isInitial": true, "isFinal": true },
+    { "id": "q1", "label": "q1", "x": 300, "y": 100, "isInitial": false, "isFinal": false }
+  ],
+  "transitions": [
+    { "id": "t1", "from": "q0", "to": "q1", "symbols": ["a"] },
+    { "id": "t2", "from": "q1", "to": "q0", "symbols": ["a"] },
+    { "id": "t3", "from": "q0", "to": "q0", "symbols": ["b"] },
+    { "id": "t4", "from": "q1", "to": "q1", "symbols": ["b"] }
+  ]
+}

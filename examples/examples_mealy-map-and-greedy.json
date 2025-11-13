@@ -1,0 +1,19 @@
+{
+  "type": "mealy",
+  "meta": { "recognitionMode": false },
+  "states": [
+    { "id": "q0", "label": "q0", "x": 100, "y": 100, "isInitial": true, "isFinal": false }
+  ],
+  "transitions": [
+    {
+      "id": "t1",
+      "from": "q0",
+      "to": "q0",
+      "pairs": [
+        { "in": "ab", "out": "XY" },
+        { "in": "a", "out": "x" },
+        { "in": "b", "out": "y" }
+      ]
+    }
+  ]
+}

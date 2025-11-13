@@ -1,0 +1,13 @@
+{
+  "type": "turing",
+  "meta": { "blank": "_", "maxSteps": 300 },
+  "states": [
+    { "id": "q0", "label": "q0", "x": 100, "y": 100, "isInitial": true, "isFinal": false },
+    { "id": "qf", "label": "qf", "x": 300, "y": 100, "isInitial": false, "isFinal": true }
+  ],
+  "transitions": [
+    { "id": "t1", "from": "q0", "to": "q0", "tm": { "read": "0", "write": "1", "move": "R" } },
+    { "id": "t2", "from": "q0", "to": "q0", "tm": { "read": "1", "write": "0", "move": "R" } },
+    { "id": "t3", "from": "q0", "to": "qf", "tm": { "read": "_", "write": "_", "move": "S" } }
+  ]
+}
