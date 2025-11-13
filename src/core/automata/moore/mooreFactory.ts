@@ -25,6 +25,20 @@ export const mooreFactory: AutomatonFactory<any, any, MooreMeta> = {
       ));
       return t;
     },
+    validateAddTransition : (snapshot, newT) => {
+      if (!newT.symbols) return null;
+      for (const symbol of newT.symbols) { 
+        const conflict = snapshot.transitions.find(tr =>
+          tr.id !== newT.id &&
+          tr.from === newT.from &&
+          tr.symbols?.includes(symbol)
+        );
+         if (conflict) {
+          return `Símbolo '${symbol}' já usado a partir de ${newT.from}.`;
+        }
+        }
+      return null;
+    },
     formatTransitionLabel: (t) => (t.symbols || []).join(', '),
     createState: (index, x, y) => ({
       id: `q${index}`,
