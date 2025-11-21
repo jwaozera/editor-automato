@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Play, Plus, Trash2, Save, Upload, RotateCcw,
   CheckCircle2, XCircle, Eye, Edit2, Undo, Redo,
-  ZoomIn, ZoomOut, Crosshair
+  ZoomIn, ZoomOut, Crosshair, Pause, ChevronLeft, ChevronRight
 } from 'lucide-react';
 
 import {
@@ -60,8 +60,8 @@ const AutomatonEditor: React.FC = () => {
 
   // Simulação
   const [inputString, setInputString] = useState('');
-  const { result, isSimulating, stepsIndex, run, reset } = useSimulation(factory);
-  const simulationResult = !isSimulating && result ? result.status : null;
+  const { result, isSimulating, isPlaying, stepsIndex, run, reset, stepForward, stepBackward, togglePlay } = useSimulation(factory);
+  const simulationResult = result ? result.status : null;
 
   // Pan/Zoom
   const { scale, setScale, pan, setPan, isPanning, beginPan, continuePan, endPan, zoomIn, zoomOut, resetView } =
@@ -617,21 +617,21 @@ const AutomatonEditor: React.FC = () => {
           <button
             onClick={() => setMode('select')}
             className={`px-4 py-2 rounded-lg font-medium transition-all ${mode === 'select' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
               }`}
           >Selecionar</button>
 
           <button
             onClick={() => setMode('addState')}
             className={`px-4 py-2 rounded-lg font-medium transition-all flex items-center gap-2 ${mode === 'addState' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
               }`}
           ><Plus size={18} /> Estado</button>
 
           <button
             onClick={() => setMode('addTransition')}
             className={`px-4 py-2 rounded-lg font-medium transition-all ${mode === 'addTransition' ? 'bg-purple-600 text-white shadow-lg shadow-purple-500/50'
-                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
               }`}
           >Transição</button>
 
@@ -682,12 +682,12 @@ const AutomatonEditor: React.FC = () => {
             onClick={zoomIn}
             className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
             title="Zoom In (Ctrl + +)"
-          ><ZoomIn size={18}/></button>
+          ><ZoomIn size={18} /></button>
           <button
             onClick={zoomOut}
             className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
             title="Zoom Out (Ctrl + -)"
-          ><ZoomOut size={18}/></button>
+          ><ZoomOut size={18} /></button>
           <button
             onClick={resetView}
             className="px-3 py-2 bg-slate-700 text-slate-300 rounded-lg hover:bg-slate-600 flex items-center gap-2"
@@ -826,15 +826,15 @@ const AutomatonEditor: React.FC = () => {
                   <button
                     onClick={toggleInitial}
                     className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${snapshot.states.find(s => s.id === selectedState)?.isInitial
-                        ? 'bg-blue-600 text-white'
-                        : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
                       }`}
                   >Inicial</button>
                   <button
                     onClick={toggleFinal}
                     className={`flex-1 px-3 py-2 rounded-lg transition-all text-sm font-medium ${snapshot.states.find(s => s.id === selectedState)?.isFinal
-                        ? 'bg-yellow-600 text-white'
-                        : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
+                      ? 'bg-yellow-600 text-white'
+                      : 'bg-slate-600 text-slate-300 hover:bg-slate-500'
                       }`}
                   >Final</button>
                 </div>
@@ -894,15 +894,43 @@ const AutomatonEditor: React.FC = () => {
               disabled={isSimulating}
             />
             <div className="flex gap-2">
-              <button
-                onClick={simulate}
-                disabled={isSimulating} // !inputString
-                 className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              ><Play size={16} /> Simular</button>
-              <button
-                onClick={reset}
-                className="px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all"
-              ><RotateCcw size={16} /></button>
+              {!isSimulating ? (
+                <button
+                  onClick={simulate}
+                  disabled={!inputString && inputString !== ''}
+                  className="flex-1 px-4 py-2 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white rounded-lg transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                ><Play size={16} /> Simular</button>
+              ) : (
+                <div className="flex-1 flex gap-1">
+                  <button
+                    onClick={reset}
+                    className="px-3 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all"
+                    title="Reiniciar"
+                  ><RotateCcw size={16} /></button>
+
+                  <button
+                    onClick={stepBackward}
+                    disabled={stepsIndex <= 0}
+                    className="flex-1 px-2 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all disabled:opacity-50 flex items-center justify-center"
+                    title="Passo Anterior"
+                  ><ChevronLeft size={20} /></button>
+
+                  <button
+                    onClick={togglePlay}
+                    className="flex-1 px-2 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg transition-all flex items-center justify-center"
+                    title={isPlaying ? "Pausar" : "Reproduzir"}
+                  >
+                    {isPlaying ? <Pause size={20} /> : <Play size={20} />}
+                  </button>
+
+                  <button
+                    onClick={stepForward}
+                    disabled={!result || stepsIndex >= result.steps.length - 1}
+                    className="flex-1 px-2 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded-lg transition-all disabled:opacity-50 flex items-center justify-center"
+                    title="Próximo Passo"
+                  ><ChevronRight size={20} /></button>
+                </div>
+              )}
             </div>
             {(factory.config.capabilities?.supportsOutputPerTransition ||
               factory.config.capabilities?.supportsOutputPerState) && (
@@ -923,8 +951,8 @@ const AutomatonEditor: React.FC = () => {
                   <div
                     key={idx}
                     className={`p-2 rounded-lg ${idx === Math.min(stepsIndex, result.steps.length - 1)
-                        ? 'bg-purple-600/30 border border-purple-500'
-                        : 'bg-slate-600/30'
+                      ? 'bg-purple-600/30 border border-purple-500'
+                      : 'bg-slate-600/30'
                       }`}
                   >
                     {step.currentState && (
@@ -969,15 +997,15 @@ const AutomatonEditor: React.FC = () => {
                   </div>
                 ))}
               </div>
-              {!isSimulating && simulationResult && (
+              {((!isSimulating || (result && stepsIndex >= result.steps.length - 1)) && simulationResult) && (
                 <div
                   className={`mt-4 p-3 rounded-lg flex items-center gap-2 ${simulationResult === 'accepted'
-                      ? 'bg-green-600/30 border border-green-500'
-                      : simulationResult === 'rejected'
-                        ? 'bg-red-600/30 border border-red-500'
-                        : simulationResult === 'transduced'
-                          ? 'bg-blue-600/30 border border-blue-500'
-                          : 'bg-yellow-600/30 border border-yellow-500'
+                    ? 'bg-green-600/30 border border-green-500'
+                    : simulationResult === 'rejected'
+                      ? 'bg-red-600/30 border border-red-500'
+                      : simulationResult === 'transduced'
+                        ? 'bg-blue-600/30 border border-blue-500'
+                        : 'bg-yellow-600/30 border border-yellow-500'
                     }`}
                 >
                   {simulationResult === 'accepted' ? (
